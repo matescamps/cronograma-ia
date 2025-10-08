@@ -1,0 +1,20 @@
+name: Optimize Cronograma
+
+on:
+  schedule:
+    - cron: "0 0 * * *"   # Executa todo dia à meia-noite
+  workflow_dispatch:
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Configura Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Instala dependências
+        run: pip install -r requirements.txt
+      - name: Roda otimizador
+        run: python optimize_cli.py dados.csv
