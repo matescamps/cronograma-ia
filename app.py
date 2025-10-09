@@ -1,650 +1,232 @@
-# app.py - Cronograma Interativo com IA (Streamlit)
-# - Lê/Escreve Google Sheets usando service account
-# - Integra com Groq (ou OpenAI fallback)
-# - Briefing diário, otimização (JSON moves), aplicar moves, salvar edições
-# - UI com data editor e botões
-
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
-import json, requests, time
-from datetime import datetime, date
-from dateutil.parser import parse as parse_date
 import gspread
 from google.oauth2.service_account import Credentials
+from datetime import datetime
+import requests
+import json
+import time
 
-st.set_page_config(page_title="Cronograma Medicina — Assistente IA", layout="wide")
+# =============================================================================
+# CONFIGURAÇÃO INICIAL E CONEXÕES
+# =============================================================================
 
-# ---------- CONFIG ----------
-# Nome da aba dentro da planilha (ex: "Sheet1" ou "Cronograma")
-SHEET_TAB_NAME = st.secrets.get("SHEET_TAB_NAME", "Sheet1")
+# Define o layout da página para "wide" para ocupar a tela inteira
+st.set_page_config(layout="wide", page_title="Cronograma Inteligente")
 
-# Colunas esperadas (exatamente como estão na sua planilha)
-EXPECTED_COLS = [
-  "Data","Dificuldade (1-5)","Status","Aluno(a)","Dia da Semana","Fase do Plano",
-  "Matéria (Manhã)","Atividade Detalhada (Manhã)","Teoria Feita (Manhã)","Questões Planejadas (Manhã)","Questões Feitas (Manhã)","% Concluído (Manhã)",
-  "Matéria (Tarde)","Atividade Detalhada (Tarde)","Teoria Feita (Tarde)","Questões Planejadas (Tarde)","Questões Feitas (Tarde)","% Concluído (Tarde)",
-  "Matéria (Noite)","Atividade Detalhada (Noite)","Teoria Feita (Noite)","Questões Planejadas (Noite)","Questões Feitas (Noite)","% Concluído (Noite)",
-  "Exame","Alerta/Comentário","Situação","Prioridade","Ação da IA"
-]
-
-# ---------- UTILITÁRIOS para Google Sheets ----------
-@st.cache_resource
-def get_gspread_client():
-    # Espera que você tenha colocado o JSON do service account em st.secrets["gcp_service_account"]
-    sa_info = st.secrets.get("gcp_service_account", None)
-    if sa_info is None:
-        st.error("Serviço GCP não configurado. Adicione o service account JSON em Streamlit secrets com a chave 'gcp_service_account'.")
-        st.stop()
-    # sa_info pode ser um objeto ou string
-    if isinstance(sa_info, str):
-        sa = json.loads(sa_info)
-    else:
-        sa = sa_info
-    scopes = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_info(sa, scopes=scopes)
-    client = gspread.authorize(creds)
-    return client
-
-def open_sheet():
-    client = get_gspread_client()
-    # planilha id ou url
-    ss_identifier = st.secrets.get("SPREADSHEET_ID_OR_URL", None)
-    if ss_identifier is None:
-        st.error("Adicione SPREADSHEET_ID_OR_URL nos Streamlit secrets (ID ou URL da planilha).")
-        st.stop()
-    # abrir por URL ou id
+# --- Conexão Segura com a API do Google Sheets ---
+@st.cache_resource(ttl=600)
+def connect_to_google_sheets():
     try:
-        if ss_identifier.startswith("http"):
-            sh = client.open_by_url(ss_identifier)
+        scopes = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds_dict = st.secrets["gcp_service_account"]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        st.error(f"Erro de Conexão com Google Sheets: Verifique seu arquivo 'secrets.toml'. Detalhes: {e}")
+        return None
+
+# --- Carregamento e Cache dos Dados da Planilha ---
+@st.cache_data(ttl=60)
+def load_data(_client, spreadsheet_id):
+    try:
+        spreadsheet = _client.open_by_key(spreadsheet_id)
+        worksheet = spreadsheet.worksheet("Schedule") # Nome da sua aba
+        df = pd.DataFrame(worksheet.get_all_records())
+        
+        # Tratamento de dados para garantir os tipos corretos
+        df['Data'] = pd.to_datetime(df['Data'], format='%d/%m/%Y', errors='coerce')
+        for col in df.columns:
+            if 'Questões' in col or 'Dificuldade' in col:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+            if 'Teoria Feita' in col:
+                df[col] = df[col].apply(lambda x: True if str(x).upper() == 'TRUE' else False)
+        return df, worksheet
+    except gspread.exceptions.WorksheetNotFound:
+        st.error("Erro: A aba 'Schedule' não foi encontrada na sua planilha. Por favor, verifique o nome.")
+        return pd.DataFrame(), None
+    except Exception as e:
+        st.error(f"Erro ao carregar os dados da planilha: {e}")
+        return pd.DataFrame(), None
+
+# --- Conexão com a IA (Groq) ---
+def call_groq_api(prompt):
+    try:
+        payload = {
+            "model": "gemma2-9b-it",
+            "messages": [{"role": "user", "content": prompt}]
+        }
+        headers = {
+            "Authorization": "Bearer " + st.secrets["groq"]["api_key"],
+            "Content-Type": "application/json"
+        }
+        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
+        if response.status_code == 200:
+            return response.json()['choices'][0]['message']['content']
         else:
-            sh = client.open_by_key(ss_identifier)
+            st.warning(f"A IA não respondeu (Código: {response.status_code}). Verifique sua chave da Groq em 'secrets.toml'.")
+            return "Não foi possível obter um conselho da IA no momento."
     except Exception as e:
-        st.error(f"Erro abrindo planilha: {e}")
-        st.stop()
-    try:
-        worksheet = sh.worksheet(SHEET_TAB_NAME)
-    except Exception as e:
-        st.error(f"Aba '{SHEET_TAB_NAME}' não encontrada. Verifique SHEET_TAB_NAME.")
-        st.stop()
-    return worksheet
+        st.error(f"Erro crítico na conexão com a IA: {e}")
+        return "Erro de conexão com a IA."
 
-@st.cache_data(ttl=30)
-def load_sheet_df():
-    ws = open_sheet()
-    values = ws.get_all_records()
-    df = pd.DataFrame(values)
-    # garantir colunas esperadas
-    for col in EXPECTED_COLS:
-        if col not in df.columns:
-            df[col] = None
-    # transformar strings de data em datetime.date
-    if "Data" in df.columns:
-        def to_date(v):
-            if pd.isna(v) or v=="":
-                return None
-            if isinstance(v, (datetime, date)):
-                return v.date() if isinstance(v, datetime) else v
-            try:
-                return parse_date(str(v), dayfirst=True).date()
-            except:
-                return None
-        df["Data"] = df["Data"].apply(to_date)
-    return df
+# =============================================================================
+# ESTILIZAÇÃO E COMPONENTES VISUAIS (CSS)
+# =============================================================================
 
-# grava apenas as linhas modificadas (comparamos dataframes)
-def write_back_changes(df_new, df_old):
-    ws = open_sheet()
-    header = ws.row_values(1)
-    header_map = {h:i+1 for i,h in enumerate(header)}
-    changed = []
-    for idx in df_new.index:
-        # comparar linha por linha
-        row_new = df_new.loc[idx]
-        row_old = df_old.loc[idx]
-        if not row_new.equals(row_old):
-            changed.append((idx, row_new))
-    if not changed:
-        return {"ok": True, "updated":0}
-    for idx, row in changed:
-        # row index in sheet = idx + 2 (porque header is row1)
-        rownum = idx + 2
-        # update each column that's changed
-        for col in df_new.columns:
-            val_new = row[col]
-            val_old = df_old.loc[idx][col]
-            # pandas NaN handling
-            if (pd.isna(val_new) and pd.isna(val_old)) or (val_new==val_old):
-                continue
-            # convert date to str if needed
-            if isinstance(val_new, (datetime, date)):
-                cell_val = val_new.strftime("%d/%m/%Y")
+def load_css():
+    st.markdown("""
+    <style>
+        .block-container {
+            padding-top: 2rem; padding-bottom: 2rem; padding-left: 5rem; padding-right: 5rem;
+        }
+        .study-card {
+            background-color: #FFFFFF; border-radius: 15px; padding: 25px;
+            margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            border: 1px solid #E0E0E0; transition: all 0.3s ease-in-out;
+            animation: fadeIn 0.5s ease-out;
+        }
+        .study-card:hover {
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12); transform: translateY(-5px);
+        }
+        body[data-theme="dark"] .study-card {
+            background-color: #2E2E2E; border: 1px solid #424242;
+        }
+        .stProgress > div > div > div > div { border-radius: 10px; }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .avatar {
+            vertical-align: middle; width: 50px; height: 50px;
+            border-radius: 50%; margin-right: 15px;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+# =============================================================================
+# LÓGICA PRINCIPAL DO APLICATIVO
+# =============================================================================
+
+def main():
+    load_css()
+    
+    st.title("🚀 Cronograma de Estudos Inteligente")
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        user = st.radio("Quem está estudando agora?", ["Mateus", "Ana"], horizontal=True, label_visibility="collapsed")
+
+    avatar_url = "https://placehold.co/100x100/E8F0FE/1a73e8?text=M" if user == "Mateus" else "https://placehold.co/100x100/E6F4EA/1e8e3e?text=A"
+    st.markdown(f"## <img src='{avatar_url}' class='avatar'>Bem-vindo(a), {user}!", unsafe_allow_html=True)
+    
+    client = connect_to_google_sheets()
+    if not client: return
+
+    spreadsheet_id = st.secrets["google_sheets"]["spreadsheet_id"]
+    df, worksheet = load_data(client, spreadsheet_id)
+
+    if df.empty: return
+
+    hoje = datetime.now().date()
+    df_hoje = df[df['Data'].dt.date == hoje]
+    df_usuario_hoje = df_hoje[(df_hoje['Aluno(a)'] == user) | (df_hoje['Aluno(a)'] == 'Ambos')]
+
+    if df_usuario_hoje.empty:
+        st.info("Você não tem tarefas agendadas para hoje. Aproveite para descansar ou revisar pendências!")
+        return
+
+    row = df_usuario_hoje.iloc[0]
+
+    # --- BRIEFING DA IA ---
+    if 'briefing' not in st.session_state or st.session_state.user != user:
+        with st.spinner("🧠 Coach IA preparando seu briefing do dia..."):
+            hora_atual = datetime.now().hour
+            saudacao = "Bom dia" if 5 <= hora_atual < 12 else "Boa tarde" if hora_atual < 18 else "Boa noite"
+            
+            progresso_manha = row['% Concluído (Manhã)'] * 100 if '% Concluído (Manhã)' in row else 0
+            tarefa_manha = row['Atividade Detalhada (Manhã)']
+
+            prompt = f"""
+            Você é um coach de vestibulandos de medicina. O momento atual é {saudacao}. 
+            Prepare um briefing curto e motivador para {user}.
+            Progresso de {user} Hoje: Tarefa da Manhã: {tarefa_manha}, Progresso da Manhã: {progresso_manha:.0f}%.
+            Sua Missão: Se for "Bom dia", dê uma dica para a tarefa da manhã. Se for "Boa tarde" ou "Boa noite", comente o progresso da manhã e dê o foco para o próximo período. Seja direto (2-3 frases).
+            """
+            st.session_state.briefing = call_groq_api(prompt)
+            st.session_state.user = user
+
+    st.info(f"**💡 Coach IA diz:** {st.session_state.briefing}")
+
+    st.header("Seu Plano de Batalha para Hoje")
+    
+    col_manha, col_tarde, col_noite = st.columns(3)
+    periodos = {"Manhã": col_manha, "Tarde": col_tarde, "Noite": col_noite}
+    
+    for periodo, coluna in periodos.items():
+        with coluna:
+            with st.container():
+                st.markdown('<div class="study-card">', unsafe_allow_html=True)
+                
+                mat_col, ativ_col, teoria_col, plan_col, feitas_col = (
+                    f'Matéria ({periodo})', f'Atividade Detalhada ({periodo})',
+                    f'Teoria Feita ({periodo})', f'Questões Planejadas ({periodo})',
+                    f'Questões Feitas ({periodo})'
+                )
+                
+                st.subheader(row[mat_col])
+                st.markdown(row[ativ_col])
+                
+                st.checkbox("Teoria Concluída", value=bool(row[teoria_col]), key=f"teoria_{periodo}")
+                
+                if row[plan_col] > 0:
+                    st.number_input(
+                        f"Questões Feitas (de {row[plan_col]})", 
+                        min_value=0, max_value=int(row[plan_col]), 
+                        value=int(row[feitas_col]), key=f"feitas_{periodo}"
+                    )
+                
+                progresso = row[f'% Concluído ({periodo})']
+                cor_barra = "#1e8e3e" if progresso > 0.8 else "#f9ab00" if progresso > 0.4 else "#d93025"
+                st.markdown(f'<style>.stProgress > div > div > div > div {{background-color: {cor_barra};}}</style>', unsafe_allow_html=True)
+                st.progress(progresso)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- LÓGICA PARA SALVAR DADOS (VERSÃO CORRIGIDA E COMPLETA) ---
+    if st.button("✅ Salvar Progresso do Dia"):
+        with st.spinner("Salvando na nuvem..."):
+            row_index = df_usuario_hoje.index[0] + 2
+            
+            updates = []
+            
+            # Mapeamento de colunas da planilha
+            col_map = {
+                'Manhã': {'teoria': 'I', 'feitas': 'K'},
+                'Tarde': {'teoria': 'O', 'feitas': 'Q'},
+                'Noite': {'teoria': 'U', 'feitas': 'W'}
+            }
+            
+            for periodo, cols in col_map.items():
+                teoria_val = st.session_state[f"teoria_{periodo}"]
+                feitas_val = row[f'Questões Feitas ({periodo})']
+                if f"feitas_{periodo}" in st.session_state:
+                    feitas_val = st.session_state[f"feitas_{periodo}"]
+                
+                updates.append({'range': f"{cols['teoria']}{row_index}", 'values': [[teoria_val]]})
+                updates.append({'range': f"{cols['feitas']}{row_index}", 'values': [[int(feitas_val)]]})
+
+            if worksheet:
+                worksheet.batch_update(updates)
+                st.success("Progresso salvo com sucesso!")
+                time.sleep(1)
+                st.cache_data.clear() # Limpa o cache para forçar a releitura dos dados
+                st.rerun()
             else:
-                cell_val = "" if pd.isna(val_new) else str(val_new)
-            if col in header_map:
-                try:
-                    ws.update_cell(rownum, header_map[col], cell_val)
-                except Exception as e:
-                    st.warning(f"Falha ao atualizar célula (linha {rownum}, col {col}): {e}")
-    return {"ok": True, "updated": len(changed)}
+                st.error("Não foi possível salvar. A conexão com a planilha falhou.")
 
-# ---------- CÁLCULO do % (mesma lógica que discutimos)
-def compute_pct_manha(teoria, planejadas, feitas):
-    # teoria: boolean/yes/no; planejadas e feitas: int
-    try:
-        t = bool(theoria)
-    except:
-        t = False
-    try:
-        p = int(planejadas or 0)
-    except:
-        p = 0
-    try:
-        f = int(feitas or 0)
-    except:
-        f = 0
-    if p == 0:
-        return 100 if t else 0
-    else:
-        pct = min(100, int((f / p) * 100))
-        return pct
+if __name__ == "__main__":
+    main()
 
-# ---------- LLM / IA: tentativa Groq -> OpenAI fallback
-def call_llm(prompt, expect_json=False):
-    """
-    Tenta chamar Groq (se configurado). Se falhar e houver OPENAI_API_KEY, tenta o OpenAI.
-    - expect_json=True: pede ao modelo que retorne JSON estrito (usado no optimize)
-    Retorna: string OR objeto (se parseado JSON) OR dict fallback {fallbackError: True, message:...}
-    """
-    # construir prompt especial se expect_json=True
-    if expect_json:
-        # instrução clara para JSON
-        prompt = ("RETORNE SOMENTE UM JSON VÁLIDO (sem texto adicional) NO FORMATO: "
-                  "{\"moves\":[{\"subject\":\"...\",\"from\":\"dd/mm/yyyy or null\",\"to\":\"dd/mm/yyyy\",\"period\":\"manha|tarde|noite\",\"reason\":\"...\"}]} \n\n"
-                  "Agora analise estas pendências e retorne um JSON:\n\n" + prompt)
-
-    # Tenta GROQ
-    groq_key = st.secrets.get("GROQ_API_KEY", None)
-    groq_url = st.secrets.get("GROQ_API_URL", "https://api.groq.ai/v1")
-    if groq_key:
-        try:
-            payload = {"prompt": prompt, "max_tokens": 800, "temperature": 0.2}
-            headers = {"Authorization": f"Bearer {groq_key}", "Content-Type":"application/json"}
-            resp = requests.post(groq_url, headers=headers, json=payload, timeout=25)
-            if resp.status_code >=200 and resp.status_code < 300:
-                text = resp.text
-                # tenta parsear JSON se esperado
-                if expect_json:
-                    try:
-                        return json.loads(text)
-                    except:
-                        # tenta extrair json embutido no texto
-                        jmatch = None
-                        import re
-                        m = re.search(r'\{[\s\S]*\}', text)
-                        if m:
-                            try:
-                                return json.loads(m.group(0))
-                            except:
-                                pass
-                return text
-            else:
-                st.warning(f"Groq HTTP {resp.status_code}: {resp.text[:200]}")
-        except Exception as e:
-            st.info(f"Groq indisponível: {e}")
-
-    # Fallback: OpenAI (se configurado)
-    openai_key = st.secrets.get("OPENAI_API_KEY", None)
-    if openai_key:
-        try:
-            import openai
-            openai.api_key = openai_key
-            # usar chat completions
-            system = "Você é um assistente de estudos. Responda de forma prática e direta."
-            messages = [
-                {"role":"system","content": system},
-                {"role":"user","content": prompt}
-            ]
-            # tentativa de usar chat completions
-            resp = openai.ChatCompletion.create(model="gpt-4o-mini", messages=messages, max_tokens=800, temperature=0.2)
-            text = ""
-            if resp and "choices" in resp and len(resp.choices) > 0:
-                text = resp.choices[0].message["content"]
-                if expect_json:
-                    try:
-                        return json.loads(text)
-                    except:
-                        import re
-                        m = re.search(r'\{[\s\S]*\}', text)
-                        if m:
-                            try:
-                                return json.loads(m.group(0))
-                            except:
-                                pass
-                return text
-        except Exception as e:
-            st.info(f"OpenAI fallback falhou: {e}")
-
-    # se chegou aqui: retornar fallback local
-    return {"fallbackError": True, "message": "IA externa indisponível. Execução com fallback local."}
-
-# ---------- Gerar briefing (texto curto e prático) ----------
-def generate_briefing_from_rows(rows):
-    # rows: lista de dicts com campos {aluno, exame, manhaTask, pctManha ...}
-    if not rows:
-        return "Sem atividades para hoje."
-    prompt = "Dados do dia (resuma e sugira foco):\n"
-    for r in rows:
-        prompt += f"- {r.get('aluno')}: Exame {r.get('exame')}. Manhã: {r.get('manhaTask')} ({r.get('pctManha')}%). Tarde: {r.get('tardeTask')} ({r.get('pctTarde')}%). Noite: {r.get('noiteTask')} ({r.get('pctNoite')}%).\n"
-    prompt += "\nDê um briefing curto (2-4 frases) e ao final 1 recomendação prática (ex: 'faça 15 questões de X agora')."
-    resp = call_llm(prompt, expect_json=False)
-    if isinstance(resp, dict) and resp.get("fallbackError"):
-        # gerar um briefing local simples
-        return resp["message"] + "\n\n" + simple_local_briefing(rows)
-    if isinstance(resp, str):
-        return resp
-    # objeto estranho
-    return json.dumps(resp, indent=2)
-
-def simple_local_briefing(rows):
-    # fallback sem IA: prioridade = menor % concluído entre manhã/tarde/noite
-    outs = []
-    for r in rows:
-        pct = min(int(r.get("pctManha") or 100), int(r.get("pctTarde") or 100), int(r.get("pctNoite") or 100))
-        outs.append((pct, r))
-    outs.sort(key=lambda x: x[0])
-    top = outs[0][1]
-    return f"Priorize {top.get('aluno')} - {top.get('manhaTask') or top.get('tardeTask') or top.get('noiteTask')}. Sugestão prática: faça 20 questões do tópico com menor %."
-
-# ---------- Construir pendências e otimização ----------
-def build_pendings_from_df(df):
-    pendings = []
-    today = date.today()
-    for idx, row in df.iterrows():
-        d = row["Data"]
-        status = row.get("Status")
-        if not isinstance(d, (date,)) or d >= today:
-            continue
-        if status in [True, "TRUE", "True", "true", "1", 1]:
-            continue
-        pendings.append({
-            "row_index": idx,
-            "date": d.strftime("%d/%m/%Y") if d else None,
-            "aluno": row.get("Aluno(a)"),
-            "exame": row.get("Exame"),
-            "manhaPct": int(row.get("% Concluído (Manhã)") or 0),
-            "tardePct": int(row.get("% Concluído (Tarde)") or 0),
-            "noitePct": int(row.get("% Concluído (Noite)") or 0),
-            "manhaTask": str(row.get("Matéria (Manhã)") or "") + " - " + str(row.get("Atividade Detalhada (Manhã)") or ""),
-            "tardeTask": str(row.get("Matéria (Tarde)") or "") + " - " + str(row.get("Atividade Detalhada (Tarde)") or ""),
-            "noiteTask": str(row.get("Matéria (Noite)") or "") + " - " + str(row.get("Atividade Detalhada (Noite)") or "")
-        })
-    return pendings
-
-def optimize_pendings(pendings):
-    if not pendings:
-        return {"moves": []}
-    prompt = "Sugira reagendamento para estas pendências, priorizando provas mais próximas. Responda apenas com JSON no formato: {\"moves\":[{subject, from, to, period, reason}]}\nPendências:\n"
-    for p in pendings:
-        prompt += f"- {p['date']}: {p['aluno']} - {p['exame']} - Manhã {p['manhaPct']}% ({p['manhaTask']}), Tarde {p['tardePct']}% ({p['tardeTask']}), Noite {p['noitePct']}% ({p['noiteTask']})\n"
-    resp = call_llm(prompt, expect_json=True)
-    if isinstance(resp, dict) and resp.get("fallbackError"):
-        return {"moves": []}
-    # se resp for string tentamos parsear
-    if isinstance(resp, str):
-        try:
-            j = json.loads(resp)
-            return j
-        except:
-            # tentar extrair json do texto
-            import re
-            m = re.search(r'\{[\s\S]*\}', resp)
-            if m:
-                try:
-                    return json.loads(m.group(0))
-                except:
-                    pass
-            return {"moves": []}
-    return resp
-
-# ---------- Aplicar moves no dataframe/planilha ----------
-def apply_moves_to_sheet(moves, df):
-    """
-    moves: lista de dicts com subject, from (dd/mm/yyyy or null), to (dd/mm/yyyy), period, reason
-    lógica:
-      - procura a linha fonte (pela descrição do assunto) e copia para target date no mesmo aluno se achar slot vazio
-      - senao cria nova linha ao final com target date e a atividade no período indicado
-    """
-    ws = open_sheet()
-    header = ws.row_values(1)
-    header_map = {h:i+1 for i,h in enumerate(header)}
-    data = ws.get_all_records()
-    # percorre moves
-    applied = []
-    for m in moves:
-        subject = m.get("subject")
-        to_str = m.get("to")
-        period = (m.get("period") or "manha").lower()
-        if not subject or not to_str:
-            continue
-        # localizar source row (busca textual)
-        source_idx = None
-        for i, row in enumerate(data):
-            man = f"{row.get('Matéria (Manhã)','')} — {row.get('Atividade Detalhada (Manhã)','')}"
-            tar = f"{row.get('Matéria (Tarde)','')} — {row.get('Atividade Detalhada (Tarde)','')}"
-            night = f"{row.get('Matéria (Noite)','')} — {row.get('Atividade Detalhada (Noite)','')}"
-            s = subject.lower()
-            if s in man.lower() or s in tar.lower() or s in night.lower():
-                source_idx = i+2
-                break
-        aluno = None
-        if source_idx:
-            aluno = ws.cell(source_idx, header_map.get("Aluno(a)")).value
-        # target date como objeto
-        try:
-            to_date = datetime.strptime(to_str, "%d/%m/%Y").date()
-        except:
-            # tentar yyyy-mm-dd
-            try:
-                to_date = parse_date(to_str).date()
-            except:
-                to_date = None
-        # procurar linha existente com mesma data e aluno
-        placed = False
-        if to_date and aluno:
-            for i, row in enumerate(data):
-                cell_date = row.get("Data")
-                # normalize date formats
-                try:
-                    if isinstance(cell_date, str) and cell_date.strip() != "":
-                        d = parse_date(cell_date, dayfirst=True).date()
-                    elif isinstance(cell_date, (datetime, date)):
-                        d = cell_date.date() if isinstance(cell_date, datetime) else cell_date
-                    else:
-                        d = None
-                except:
-                    d = None
-                if d == to_date and str(row.get("Aluno(a)")) == str(aluno):
-                    # tenta inserir no período escolhido se vazio
-                    if period.startswith("man"):
-                        if not row.get("Atividade Detalhada (Manhã)"):
-                            ws.update_cell(i+2, header_map["Atividade Detalhada (Manhã)"], subject)
-                            ws.update_cell(i+2, header_map["Ação da IA"], f"Reagendado pela IA para {to_str} (manhã) — {m.get('reason','')}")
-                            placed = True
-                            break
-                    if period.startswith("tar") and not placed:
-                        if not row.get("Atividade Detalhada (Tarde)"):
-                            ws.update_cell(i+2, header_map["Atividade Detalhada (Tarde)"], subject)
-                            ws.update_cell(i+2, header_map["Ação da IA"], f"Reagendado pela IA para {to_str} (tarde) — {m.get('reason','')}")
-                            placed = True
-                            break
-                    if period.startswith("noi") and not placed:
-                        if not row.get("Atividade Detalhada (Noite)"):
-                            ws.update_cell(i+2, header_map["Atividade Detalhada (Noite)"], subject)
-                            ws.update_cell(i+2, header_map["Ação da IA"], f"Reagendado pela IA para {to_str} (noite) — {m.get('reason','')}")
-                            placed = True
-                            break
-        # se não colocou, cria nova linha no fim
-        if not placed:
-            newrow = [None] * len(header)
-            # set Data, Aluno, Atividade Detalhada (manhã)
-            if header_map.get("Data") and to_date:
-                newrow[header_map["Data"] - 1] = to_date.strftime("%d/%m/%Y")
-            if header_map.get("Aluno(a)"):
-                newrow[header_map["Aluno(a)"] - 1] = aluno if aluno else ""
-            if period.startswith("man"):
-                newrow[header_map["Atividade Detalhada (Manhã)"] - 1] = subject
-            elif period.startswith("tar"):
-                newrow[header_map["Atividade Detalhada (Tarde)"] - 1] = subject
-            else:
-                newrow[header_map["Atividade Detalhada (Noite)"] - 1] = subject
-            newrow[header_map.get("Ação da IA", -1) - 1] = f"Criado pela IA: reagendamento -> {to_str} ({period})"
-            ws.append_row(newrow)
-            applied.append(m)
-    return {"applied": len(applied)}
-
-# ---------- UI ----------
-st.title("Cronograma Interativo — Assistente IA (Medicina)")
-
-col1, col2 = st.columns([1, 3])
-with col1:
-    st.subheader("Controles")
-    st.write("Filtros e ações")
-    df = load_sheet_df()
-    aluno_filter = st.selectbox("Aluno", options=["Todos","Ana","Mateus"], index=0)
-    exame_filter = st.text_input("Filtro Exame (opcional)")
-    start_date = st.date_input("Data inicio", value=date.today())
-    end_date = st.date_input("Data fim", value=date.today())
-    if st.button("Recarregar planilha"):
-        st.cache_data.clear()
-        st.experimental_rerun()
-    st.markdown("---")
-    if st.button("Recalcular % (local) para visualização"):
-        # recalcula percentuais no dataframe preview (não grava ainda)
-        def recalc_row(r):
-            r["% Concluído (Manhã)"] = compute_pct_manha(r.get("Teoria Feita (Manhã)"), r.get("Questões Planejadas (Manhã)"), r.get("Questões Feitas (Manhã)"))
-            r["% Concluído (Tarde)"] = compute_pct_manha(r.get("Teoria Feita (Tarde)"), r.get("Questões Planejadas (Tarde)"), r.get("Questões Feitas (Tarde)"))
-            r["% Concluído (Noite)"] = compute_pct_manha(r.get("Teoria Feita (Noite)"), r.get("Questões Planejadas (Noite)"), r.get("Questões Feitas (Noite)"))
-            return r
-        df = df.apply(recalc_row, axis=1)
-        st.success("Recalculado (preview). Clique em 'Salvar alterações' para gravar na planilha.")
-
-    if st.button("Marcar status autom. (linhas com 3x 100%)"):
-        # faz atualização direta
-        ws = open_sheet()
-        header = ws.row_values(1)
-        header_map = {h:i+1 for i,h in enumerate(header)}
-        cnt = 0
-        for i, r in df.iterrows():
-            try:
-                if int(r.get("% Concluído (Manhã)") or 0) >= 99 and int(r.get("% Concluído (Tarde)") or 0) >= 99 and int(r.get("% Concluído (Noite)") or 0) >= 99:
-                    ws.update_cell(i+2, header_map["Status"], True)
-                    ws.update_cell(i+2, header_map["Situação"], "Concluído (auto)")
-                    cnt += 1
-            except:
-                pass
-        st.success(f"{cnt} linhas marcadas como concluídas.")
-
-with col2:
-    st.subheader("Visão geral")
-    # filtrar df
-    view_df = df.copy()
-    if aluno_filter != "Todos":
-        view_df = view_df[view_df["Aluno(a)"] == aluno_filter]
-    if exame_filter.strip() != "":
-        view_df = view_df[view_df["Exame"]].astype(str)
-        view_df = df[df["Exame"].astype(str).str.contains(exame_filter, case=False, na=False)]
-    # filtrar por data
-    def date_in_range(d):
-        if not isinstance(d, (date,)):
-            return False
-        return d >= start_date and d <= end_date
-    view_df = view_df[view_df["Data"].apply(lambda x: date_in_range(x) if x is not None else False)]
-    st.write(f"Linhas: {len(view_df)}")
-    # exibimos editor de dados (Streamlit tem data_editor)
-    try:
-        edited = st.data_editor(view_df, num_rows="dynamic")
-    except Exception:
-        edited = st.experimental_data_editor(view_df)
-
-    # Botões para salvar / briefing / otimizar
-    colA, colB, colC = st.columns(3)
-    with colA:
-        if st.button("Salvar alterações"):
-            # precisamos mapear edited -> original df e escrever apenas mudanças
-            # recompor o df global: substituir apenas as linhas exibidas
-            base_df = df.copy()
-            # edited has same index as view_df; get mapping
-            for i, row in edited.reset_index().iterrows():
-                orig_idx = row["index"]
-                base_df.loc[orig_idx] = row.drop(labels=["index"])
-            res = write_back_changes(base_df, load_sheet_df())
-            if res.get("ok"):
-                st.success(f"Salvo. Linhas atualizadas: {res.get('updated')}")
-                st.cache_data.clear()
-            else:
-                st.error("Erro ao salvar.")
-    with colB:
-        if st.button("Pedir Briefing (IA)"):
-            # montar dados do dia para briefing
-            todays = []
-            for i, r in df.iterrows():
-                if r["Data"] == date.today():
-                    todays.append({
-                        "aluno": r.get("Aluno(a)"),
-                        "exame": r.get("Exame"),
-                        "manhaTask": f"{r.get('Matéria (Manhã)')} — {r.get('Atividade Detalhada (Manhã)')}",
-                        "pctManha": int(r.get("% Concluído (Manhã)") or 0),
-                        "tardeTask": f"{r.get('Matéria (Tarde)')} — {r.get('Atividade Detalhada (Tarde)')}",
-                        "pctTarde": int(r.get("% Concluído (Tarde)") or 0),
-                        "noiteTask": f"{r.get('Matéria (Noite)')} — {r.get('Atividade Detalhada (Noite)')}",
-                        "pctNoite": int(r.get("% Concluído (Noite)") or 0),
-                    })
-            briefing = generate_briefing_from_rows(todays)
-            st.info("Briefing da IA:")
-            st.write(briefing)
-    with colC:
-        if st.button("Otimizar pendências (IA)"):
-            # construir pendings
-            pendings = build_pendings_from_df(df)
-            st.write(f"Pendências encontradas: {len(pendings)}")
-            if len(pendings) == 0:
-                st.success("Nenhuma pendência antiga encontrada.")
-            else:
-                with st.spinner("Pedindo sugestões à IA (JSON)..."):
-                    optimized = optimize_pendings(pendings)
-                # mostrar moves
-                st.write("Sugestões recebidas (moves):")
-                st.json(optimized)
-                moves = optimized.get("moves", []) if isinstance(optimized, dict) else []
-                if moves:
-                    if st.button("Aplicar moves sugeridos"):
-                        res = apply_moves_to_sheet(moves, df)
-                        st.success(f"Ações aplicadas: {res.get('applied')}")
-                        st.cache_data.clear()
-                        st.experimental_rerun()
-
-st.markdown("---")
-st.caption("Desenvolvido para cronograma de Medicina — Streamlit + Google Sheets + IA. Use com cuidado, teste em cópia da planilha.")
-import streamlit as st
-import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
-
-# -------------------------
-# CONFIGURAÇÕES DO SECRETS
-# -------------------------
-SPREADSHEET_ID_OR_URL = st.secrets["SPREADSHEET_ID_OR_URL"]
-SHEET_TAB_NAME = st.secrets["SHEET_TAB_NAME"]
-GCP_SERVICE_ACCOUNT = st.secrets["gcp_service_account"]
-
-# -------------------------
-# FUNÇÃO PARA CONECTAR PLANILHA
-# -------------------------
-@st.cache_data(ttl=600)
-def load_sheet_df():
-    creds = Credentials.from_service_account_info(GCP_SERVICE_ACCOUNT)
-    client = gspread.authorize(creds)
-    sheet = client.open_by_url(SPREADSHEET_ID_OR_URL).worksheet(SHEET_TAB_NAME)
-    data = sheet.get_all_records()
-    df = pd.DataFrame(data)
-    return df, sheet
-
-# -------------------------
-# LOGIN INICIAL
-# -------------------------
-if "user" not in st.session_state:
-    st.session_state["user"] = None
-
-if st.session_state["user"] is None:
-    st.title("Quem está usando o app?")
-    user = st.selectbox("Selecione seu nome", ["Mateus", "Ana"])
-    if st.button("Entrar"):
-        st.session_state["user"] = user
-        st.experimental_rerun()
-
-# -------------------------
-# CARREGANDO PLANILHA
-# -------------------------
-if st.session_state["user"]:
-    st.title(f"Olá, {st.session_state['user']}! Aqui está seu resumo diário:")
-    try:
-        df, sheet = load_sheet_df()
-        st.success("Planilha carregada com sucesso!")
-        # Mostrando primeiras linhas como exemplo
-        st.dataframe(df.head())
-    except Exception as e:
-        st.error(f"Erro ao abrir planilha: {e}")
-import datetime
-
-# -------------------------
-# FUNÇÃO PARA CALCULAR % CONCLUÍDO
-# -------------------------
-def calc_percentage(teoria, quest_planejadas, quest_feitas):
-    if teoria:
-        base = quest_planejadas + 1
-        concluido = 1 + quest_feitas
-        perc = min(concluido / base * 100, 100)
-    else:
-        base = quest_planejadas + 1
-        perc = min(quest_feitas / base * 100, 100)
-    return perc
-
-# -------------------------
-# FUNÇÃO PARA EXIBIR PERÍODO EM CARD
-# -------------------------
-def display_period(df, row_idx, period):
-    materia = df.loc[row_idx, f"Matéria ({period})"]
-    atividade = df.loc[row_idx, f"Atividade Detalhada ({period})"]
-    teoria_feita = df.loc[row_idx, f"Teoria Feita ({period})"]
-    quest_planejadas = df.loc[row_idx, f"Questões Planejadas ({period})"]
-    quest_feitas = df.loc[row_idx, f"Questões Feitas ({period})"]
-
-    st.subheader(f"{period} - {materia}")
-    st.write(atividade)
-
-    # Checkbox teoria
-    teoria = st.checkbox("Teoria feita?", value=teoria_feita, key=f"{row_idx}_{period}_teoria")
-
-    # Número de questões feitas
-    quest = st.number_input(
-        "Questões feitas",
-        min_value=0,
-        max_value=quest_planejadas,
-        value=quest_feitas,
-        step=1,
-        key=f"{row_idx}_{period}_quest"
-    )
-
-    # % concluído
-    perc = calc_percentage(teoria, quest_planejadas, quest)
-    st.progress(int(perc))
-
-    return teoria, quest, perc
-
-# -------------------------
-# DASHBOARD DIÁRIO
-# -------------------------
-today = datetime.date.today()
-row_today = df[df['Data'] == today.strftime("%d/%m/%Y")]
-
-if row_today.empty:
-    st.info("Nenhuma tarefa planejada para hoje.")
-else:
-    row_idx = row_today.index[0]
-
-    st.header(f"Tarefas de {today.strftime('%d/%m/%Y')}")
-    periods = ["Manhã", "Tarde", "Noite"]
-
-    updated_values = {}
-
-    for period in periods:
-        teoria, quest, perc = display_period(df, row_idx, period)
-        updated_values[f"Teoria Feita ({period})"] = teoria
-        updated_values[f"Questões Feitas ({period})"] = quest
-        updated_values[f"% Concluído ({period})"] = perc
-
-    # Botão para salvar alterações
-    if st.button("Salvar alterações"):
-        for col, val in updated_values.items():
-            sheet.update_cell(row_idx + 2, df.columns.get_loc(col) + 1, val)
-        st.success("Alterações salvas na planilha!")
