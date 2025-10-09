@@ -15,7 +15,7 @@ import base64
 
 st.set_page_config(
     layout="wide", 
-    page_title="StudyFlow Pro",
+    page_title="Cronograma Ana&Mateus",
     page_icon="🎓",
     initial_sidebar_state="collapsed"
 )
