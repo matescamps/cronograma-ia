@@ -1,4 +1,3 @@
-# backend/main.py
 import os
 import json
 from fastapi import FastAPI, HTTPException
@@ -48,11 +47,11 @@ def startup_event():
 def get_data_as_dataframe():
     if not hasattr(app.state, 'worksheet') or app.state.worksheet is None:
         raise HTTPException(status_code=503, detail="Serviço indisponível: conexão com a planilha falhou.")
-
+    
     worksheet = app.state.worksheet
     all_values = worksheet.get_all_values()
     if not all_values: return pd.DataFrame()
-
+    
     headers = all_values[0]
     df = pd.DataFrame(all_values[1:], columns=headers)
     df['Data'] = pd.to_datetime(df['Data'], format='%d/%m/%Y', errors='coerce')
@@ -67,14 +66,14 @@ def get_today_tasks(user: str):
     try:
         df = get_data_as_dataframe()
         if df.empty: return []
-
+        
         today = date.today()
         df_today = df[df['Data'].dt.date == today]
         df_user_today = df_today[
             (df_today['Aluno(a)'].str.lower() == user.lower()) | 
             (df_today['Aluno(a)'].str.lower() == 'ambos')
         ].fillna('').to_dict('records')
-
+        
         return df_user_today
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -93,4 +92,4 @@ def get_coach_advice(request: CoachRequest):
         response.raise_for_status()
         return json.loads(response.json()['choices'][0]['message']['content'])
     except Exception as e:
-        return {"summary": f"// TRANSMISSÃO INTERROMPIDA // Plano de contingência para {request.subject}: Focar nos fundamentos.", "flashcards": [{"q": "Principal objetivo?", "a": "Entender o conceito central."}, {"q": "O que evitar?", "a": "Distrações."}]}
+        return {"summary": f"// TRANSMISSÃO INTERROMPIDA // Plano de contingência para {request.subject}: Focar nos fundamentos. Revisar por 20min, praticar por 30min.", "flashcards": [{"q": "Principal objetivo?", "a": "Entender o conceito central."}, {"q": "O que evitar?", "a": "Distrações."}]}
