@@ -7,14 +7,13 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Light theme palette inspired by minimalist sci-fi
-        'base': '#FFFFFF', // page background
-        'surface': '#F9FAFB', // cards/background sections
-        'panel': '#E5E7EB', // subtle borders/panels
-        'primary': '#2563EB', // electric blue accent
-        'secondary': '#111827', // near-black text
-        'muted': '#6B7280', // secondary text
-        'success': '#10B981', // green status
+        'base': '#0D1117',
+        'surface': '#161B22',
+        'panel': '#21262D',
+        'primary': '#58A6FF',
+        'secondary': '#C9D1D9',
+        'muted': '#8B949E',
+        'success': '#3FB950',
       },
       fontFamily: {
         sans: ['Inter', 'sans-serif'],

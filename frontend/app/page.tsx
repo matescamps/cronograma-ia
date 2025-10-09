@@ -20,18 +20,12 @@ export default function FocusOS() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [streakDays, setStreakDays] = useState<number>(0);
 
   const currentPeriod = useMemo(() => {
     const hour = new Date().getHours();
     if (hour < 12) return 'Manhã';
     if (hour < 18) return 'Tarde';
     return 'Noite';
-  }, []);
-
-  useEffect(() => {
-    const stored = Number(localStorage.getItem('focus_streak') || '0');
-    setStreakDays(stored);
   }, []);
 
   useEffect(() => {
@@ -61,11 +55,11 @@ export default function FocusOS() {
 
   return (
     <main className="max-w-5xl mx-auto p-4 md:p-8 animate-fade-in">
-      <Header user={user} streakDays={streakDays} onLogout={() => setUser(null)} />
+      <Header user={user} onLogout={() => setUser(null)} />
       {loading && <StatusDisplay message="Sincronizando com o satélite de missões..." />}
       {error && <StatusDisplay message={`ERRO DE CONEXÃO: ${error}`} isError />}
       {!loading && !error && (
-        <MissionControl tasks={tasks} period={currentPeriod} onComplete={() => incrementStreak(setStreakDays)} />
+        <MissionControl tasks={tasks} period={currentPeriod} />
       )}
     </main>
   );
@@ -73,31 +67,24 @@ export default function FocusOS() {
 
 const LoginScreen = ({ onLogin }: { onLogin: (user: string) => void }) => (
   <div className="flex items-center justify-center min-h-screen">
-    <div className="bg-surface p-8 rounded-lg shadow-2xl text-center w-full max-w-xl animate-fade-in">
-      <h1 className="text-4xl font-extrabold text-secondary mb-2">Cronograma A&M</h1>
-      <p className="text-muted mb-8">Seleção de Operador</p>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <button onClick={() => onLogin('Ana')} className="w-full bg-white text-secondary border border-panel font-bold py-4 px-6 rounded-xl shadow-sm hover:shadow-md transition-all hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-primary">Entrar como Ana</button>
-        <button onClick={() => onLogin('Mateus')} className="w-full bg-white text-secondary border border-panel font-bold py-4 px-6 rounded-xl shadow-sm hover:shadow-md transition-all hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-primary">Entrar como Mateus</button>
+    <div className="bg-surface p-8 rounded-lg shadow-2xl text-center w-full max-w-sm animate-fade-in">
+      <h1 className="text-3xl font-bold text-white mb-2">FOCUS OS</h1>
+      <p className="text-muted mb-6">Autenticação de Operador</p>
+      <div className="space-y-4">
+        <button onClick={() => onLogin('Ana')} className="w-full bg-primary/20 text-primary border border-primary/50 font-bold py-3 px-6 rounded-lg transition-transform transform hover:scale-105 hover:bg-primary/30">OPERADORA ANA</button>
+        <button onClick={() => onLogin('Mateus')} className="w-full bg-primary/20 text-primary border border-primary/50 font-bold py-3 px-6 rounded-lg transition-transform transform hover:scale-105 hover:bg-primary/30">OPERADOR MATEUS</button>
       </div>
     </div>
   </div>
 );
 
-const Header = ({ user, streakDays, onLogout }: { user: string; streakDays: number; onLogout: () => void }) => (
-  <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
+const Header = ({ user, onLogout }: { user: string; onLogout: () => void }) => (
+  <header className="flex justify-between items-center mb-8">
     <div>
-      <h1 className="text-2xl font-extrabold text-secondary">Boa tarde, {user}.</h1>
-      <div className="flex items-center gap-3 text-sm mt-1">
-        <StatusPill label="Planilha" colorClass="bg-success" stateKey="sheet" />
-        <StatusPill label="IA" colorClass="bg-success" stateKey="ia" />
-        <div className="flex items-center gap-1 text-muted">
-          <span className="">🔥 Sequência de Foco:</span>
-          <span className="font-semibold text-secondary">{streakDays} dias</span>
-        </div>
-      </div>
+      <h1 className="text-2xl font-bold text-white">Painel de Comando</h1>
+      <p className="text-muted">Operador: {user}</p>
     </div>
-    <button onClick={onLogout} className="text-muted hover:text-primary transition-colors">Sair</button>
+    <button onClick={onLogout} className="text-muted hover:text-primary transition-colors">Logout</button>
   </header>
 );
 
@@ -107,7 +94,7 @@ const StatusDisplay = ({ message, isError = false }: { message: string; isError?
   </div>
 );
 
-const MissionControl = ({ tasks, period, onComplete }: { tasks: Task[]; period: string; onComplete: () => void }) => {
+const MissionControl = ({ tasks, period }: { tasks: Task[]; period: string }) => {
   const currentTask = useMemo(() => {
     if (!tasks || tasks.length === 0) return null;
     const taskForPeriod = tasks[0];
@@ -129,13 +116,12 @@ const MissionControl = ({ tasks, period, onComplete }: { tasks: Task[]; period: 
   const subject = task[`Matéria (${activePeriod})` as keyof Task];
   const activity = task[`Atividade Detalhada (${activePeriod})` as keyof Task];
 
-  return <MissionCard subject={subject} activity={activity} onComplete={onComplete} />;
+  return <MissionCard subject={subject} activity={activity} />;
 };
 
-const MissionCard = ({ subject, activity, onComplete }: { subject: string; activity: string; onComplete: () => void }) => {
+const MissionCard = ({ subject, activity }: { subject: string; activity: string }) => {
   const [advice, setAdvice] = useState<CoachAdvice | null>(null);
   const [loading, setLoading] = useState(true);
-  const [progress, setProgress] = useState<number>(0);
 
   useEffect(() => {
     const fetchAdvice = async () => {
@@ -153,35 +139,23 @@ const MissionCard = ({ subject, activity, onComplete }: { subject: string; activ
     fetchAdvice();
   }, [subject, activity]);
 
-  const completeTask = () => {
-    onComplete();
-  };
-
   return (
-    <div className="bg-white border border-panel rounded-2xl p-6 shadow-sm">
-      <h2 className="text-3xl font-extrabold text-secondary mb-1">{subject}</h2>
-      <p className="text-primary text-lg mb-4">{activity}</p>
-
-      <div className="h-2 w-full bg-panel rounded-full overflow-hidden mb-6">
-        <div className="h-full bg-primary transition-all" style={{ width: `${progress}%` }} />
-      </div>
+    <div className="bg-surface border border-panel rounded-lg p-6">
+      <h2 className="text-3xl font-extrabold text-white mb-1">{subject}</h2>
+      <p className="text-primary text-lg mb-6">{activity}</p>
 
       {loading && <div className="text-center p-4 bg-panel rounded-md text-muted animate-pulse">Recebendo transmissão do System Coach...</div>}
       {advice && (
         <div className="space-y-6">
           <div className="border-l-4 border-primary pl-4">
-            <h3 className="font-semibold text-secondary mb-2">PLANO DE AÇÃO TÁTICO</h3>
-            <PlanList summary={advice.summary} />
+            <h3 className="font-semibold text-white mb-2">PLANO DE AÇÃO TÁTICO</h3>
+            <p className="text-muted">{advice.summary}</p>
           </div>
           <div>
-            <h3 className="font-semibold text-secondary mb-3">FLASHCARDS</h3>
+            <h3 className="font-semibold text-white mb-3">FLASHCARDS DE RECONHECIMENTO</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {advice.flashcards.map((card, i) => <Flashcard key={i} front={card.q} back={card.a} />)}
             </div>
-          </div>
-          <div className="flex items-center justify-between pt-2">
-            <button className="px-4 py-2 rounded-lg border border-panel text-secondary hover:border-primary hover:text-primary transition-colors" onClick={() => setProgress(p => Math.min(100, p + 25))}>+ Progresso</button>
-            <button className="px-4 py-2 rounded-lg bg-primary text-white hover:opacity-90" onClick={completeTask}>Marcar como concluída</button>
           </div>
         </div>
       )}
@@ -193,64 +167,14 @@ const Flashcard = ({ front, back }: { front: string; back: string }) => {
   const [isFlipped, setIsFlipped] = useState(false);
   return (
     <div className="perspective h-40" onClick={() => setIsFlipped(!isFlipped)}>
-      <div className={clsx("relative w-full h-full transform-style-3d transition-transform duration-700", isFlipped && "rotate-y-180")}> 
-        <div className="absolute w-full h-full backface-hidden flex items-center justify-center p-4 rounded-xl bg-surface border border-panel text-center cursor-pointer shadow-sm">
-          <p className="text-secondary">{front}</p>
+      <div className={clsx("relative w-full h-full transform-style-3d transition-transform duration-700", isFlipped && "rotate-y-180")}>
+        <div className="absolute w-full h-full backface-hidden flex items-center justify-center p-4 rounded-lg bg-panel text-center cursor-pointer">
+          <p>{front}</p>
         </div>
-        <div className="absolute w-full h-full backface-hidden flex items-center justify-center p-4 rounded-xl bg-primary text-white text-center cursor-pointer rotate-y-180 shadow-sm">
+        <div className="absolute w-full h-full backface-hidden flex items-center justify-center p-4 rounded-lg bg-primary text-base text-center cursor-pointer rotate-y-180">
           <p className="font-semibold">{back}</p>
         </div>
       </div>
     </div>
   );
 };
-
-function incrementStreak(setter: (updater: (prev: number) => number) => void) {
-  const today = new Date().toDateString();
-  const key = 'focus_streak';
-  const metaKey = 'focus_streak_last_completion';
-  const stored = Number(localStorage.getItem(key) || '0');
-  const last = localStorage.getItem(metaKey);
-  if (last !== today) {
-    const next = stored + 1;
-    localStorage.setItem(key, String(next));
-    localStorage.setItem(metaKey, today);
-    setter(() => next);
-  } else {
-    setter(() => stored);
-  }
-}
-
-function StatusPill({ label, colorClass, stateKey }: { label: string; colorClass: string; stateKey: 'sheet' | 'ia' }) {
-  const [online, setOnline] = useState<boolean>(true);
-  useEffect(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
-    fetch(`${apiUrl}/status`).then(r => r.json()).then((s) => {
-      setOnline(Boolean(s?.[stateKey]?.online));
-    }).catch(() => setOnline(false));
-  }, [stateKey]);
-  return (
-    <span className={clsx('inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs', 'bg-surface border border-panel text-muted')}>
-      <span className={clsx('h-2 w-2 rounded-full', online ? colorClass : 'bg-red-500')} />
-      <span>{label}: {online ? 'Online' : 'Offline'}</span>
-    </span>
-  );
-}
-
-function PlanList({ summary }: { summary: string }) {
-  if (!summary) return null;
-  const items = summary
-    .split(/\n|\.|;|\u2022|\d+\)/)
-    .map(s => s.trim())
-    .filter(Boolean);
-  if (items.length <= 1) {
-    return <p className="text-muted">{summary}</p>;
-  }
-  return (
-    <ol className="list-decimal ml-6 text-muted space-y-1">
-      {items.map((step, idx) => (
-        <li key={idx}>{step}</li>
-      ))}
-    </ol>
-  );
-}

@@ -2,12 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Base document styles for the Light theme */
-html, body {
+body {
   @apply bg-base text-secondary antialiased;
 }
 
-.perspective { perspective: 1000px; }
-.transform-style-3d { transform-style: preserve-3d; }
-.rotate-y-180 { transform: rotateY(180deg); }
-.backface-hidden { backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.perspective {
+  perspective: 1000px;
+}
+.transform-style-3d {
+  transform-style: preserve-3d;
+}
+.rotate-y-180 {
+  transform: rotateY(180deg);
+}
+.backface-hidden {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
