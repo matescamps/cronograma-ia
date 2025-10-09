@@ -302,6 +302,189 @@ def ask_ai(req: AskRequest):
         return {"answer": "Desculpe, houve um erro ao processar sua pergunta. Tente novamente."}
 
 
+# ------------------ Progress & History (writes to Google Sheets) ------------------
+class UpdateProgressRequest(BaseModel):
+    user: str
+    period: str  # 'Manhã' | 'Tarde' | 'Noite'
+    planned: int | None = None
+    done: int | None = None
+    theory_done: bool | None = None
+    percent: float | None = None
+    status: str | None = None
+
+
+class UpdateMetaRequest(BaseModel):
+    user: str
+    difficulty: float | None = None  # Dificuldade (1-5)
+    priority: str | None = None
+    situation: str | None = None  # Situação
+    alert: str | None = None  # Alerta/Comentário
+    phase: str | None = None  # Fase do Plano
+
+
+def _weekday_pt_br(d: date) -> str:
+    mapping = {
+        0: "Segunda",
+        1: "Terça",
+        2: "Quarta",
+        3: "Quinta",
+        4: "Sexta",
+        5: "Sábado",
+        6: "Domingo",
+    }
+    return mapping[d.weekday()]
+
+
+def _ensure_worksheet_ready():
+    if not hasattr(app.state, "worksheet") or app.state.worksheet is None:
+        raise HTTPException(status_code=503, detail="Planilha indisponível.")
+    return app.state.worksheet
+
+
+def _headers_map(ws) -> dict:
+    headers = ws.row_values(1)
+    return {h: idx + 1 for idx, h in enumerate(headers)}
+
+
+def _find_row_for_today(ws, user: str) -> int | None:
+    all_values = ws.get_all_values()
+    if not all_values:
+        return None
+    headers = all_values[0]
+    try:
+        col_data = headers.index("Data")
+        col_user = headers.index("Aluno(a)")
+    except ValueError:
+        return None
+    today_str = date.today().strftime("%d/%m/%Y")
+    for i in range(1, len(all_values)):
+        row = all_values[i]
+        data_val = row[col_data] if col_data < len(row) else ""
+        user_val = row[col_user].lower() if col_user < len(row) and row[col_user] else ""
+        if data_val == today_str and user_val == user.lower():
+            return i + 1  # 1-based index (including header)
+    return None
+
+
+def _create_today_row(ws, user: str) -> int:
+    headers = ws.row_values(1)
+    size = len(headers)
+    row = [""] * size
+    header_to_index = {h: i for i, h in enumerate(headers)}
+    if "Data" in header_to_index:
+        row[header_to_index["Data"]] = date.today().strftime("%d/%m/%Y")
+    if "Aluno(a)" in header_to_index:
+        row[header_to_index["Aluno(a)"]] = user
+    if "Dia da Semana" in header_to_index:
+        row[header_to_index["Dia da Semana"]] = _weekday_pt_br(date.today())
+    ws.append_row(row, value_input_option="USER_ENTERED")
+    return ws.row_count
+
+
+@app.post("/update_progress")
+def update_progress(req: UpdateProgressRequest) -> dict:
+    ws = _ensure_worksheet_ready()
+    period = req.period
+    if period not in ("Manhã", "Tarde", "Noite"):
+        raise HTTPException(status_code=400, detail="Período inválido.")
+
+    row_idx = _find_row_for_today(ws, req.user)
+    if row_idx is None:
+        logger.info("Linha do dia não encontrada para %s. Criando...", req.user)
+        row_idx = _create_today_row(ws, req.user)
+
+    headers = _headers_map(ws)
+    updates: list[tuple[int, int, str]] = []
+
+    def maybe_update(header_name: str, value) -> None:
+        if value is None:
+            return
+        col = headers.get(header_name)
+        if not col:
+            return
+        updates.append((row_idx, col, value))
+
+    # Derivar percent se não enviado e se possível
+    percent = req.percent
+    if percent is None and req.planned and req.planned > 0 and req.done is not None:
+        percent = min(100, round((req.done / req.planned) * 100))
+
+    maybe_update(f"Questões Planejadas ({period})", req.planned)
+    maybe_update(f"Questões Feitas ({period})", req.done)
+    maybe_update(f"% Concluído ({period})", percent)
+    if req.theory_done is not None:
+        maybe_update(f"Teoria Feita ({period})", "Sim" if req.theory_done else "Não")
+    maybe_update("Status", req.status)
+
+    # Execute updates
+    for r, c, v in updates:
+        ws.update_cell(r, c, v)
+
+    return {"ok": True, "row": row_idx, "updated": len(updates)}
+
+
+@app.post("/update_meta")
+def update_meta(req: UpdateMetaRequest) -> dict:
+    ws = _ensure_worksheet_ready()
+    row_idx = _find_row_for_today(ws, req.user)
+    if row_idx is None:
+        row_idx = _create_today_row(ws, req.user)
+    headers = _headers_map(ws)
+    updates: list[tuple[int, int, str]] = []
+
+    def maybe_update(header_name: str, value) -> None:
+        if value is None:
+            return
+        col = headers.get(header_name)
+        if not col:
+            return
+        updates.append((row_idx, col, value))
+
+    maybe_update("Dificuldade (1-5)", req.difficulty)
+    maybe_update("Prioridade", req.priority)
+    maybe_update("Situação", req.situation)
+    maybe_update("Alerta/Comentário", req.alert)
+    maybe_update("Fase do Plano", req.phase)
+
+    for r, c, v in updates:
+        ws.update_cell(r, c, v)
+
+    return {"ok": True, "row": row_idx, "updated": len(updates)}
+
+
+@app.get("/history/{user}")
+def history(user: str, days: int = 14) -> dict:
+    df = get_data_as_dataframe()
+    if df.empty:
+        return {"user": user, "items": []}
+    df_user = df[(df['Aluno(a)'].str.lower() == user.lower()) | (df['Aluno(a)'].str.lower() == 'ambos')]
+    df_user = df_user.sort_values(by='Data', ascending=False)
+    items = []
+    count = 0
+    for _, row in df_user.iterrows():
+        if pd.isna(row.get('Data')):
+            continue
+        d = row['Data'].date()
+        # Percentual médio dos períodos
+        pcts = []
+        for period in ['Manhã', 'Tarde', 'Noite']:
+            pct = _safe_number(row.get(f"% Concluído ({period})", 0))
+            if pct:
+                pcts.append(pct)
+        overall = round(sum(pcts)/len(pcts)) if pcts else 0
+        items.append({
+            "date": d.isoformat(),
+            "weekday": _weekday_pt_br(d),
+            "overall": overall,
+            "difficulty": _safe_number(row.get('Dificuldade (1-5)', 0)),
+            "status": str(row.get('Situação', '')).strip(),
+        })
+        count += 1
+        if count >= days:
+            break
+    return {"user": user, "items": items}
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     logger.info("Iniciando Focus OS API...")
