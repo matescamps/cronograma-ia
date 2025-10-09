@@ -7,6 +7,7 @@ interface CommandBarProps {
   open: boolean;
   setOpen: (v: boolean) => void;
   onNavigate: (sectionId: string) => void;
+  onToggleTheme?: () => void;
 }
 
 const COMMANDS = [
@@ -15,9 +16,10 @@ const COMMANDS = [
   { id: "pomodoro-section", label: "Iniciar Pomodoro" },
   { id: "quiz-section", label: "Gerar Quiz Relâmpago" },
   { id: "history-section", label: "Ver Histórico" },
+  { id: "toggle-theme", label: "Alternar tema" },
 ];
 
-export default function CommandBar({ open, setOpen, onNavigate }: CommandBarProps) {
+export default function CommandBar({ open, setOpen, onNavigate, onToggleTheme }: CommandBarProps) {
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
@@ -48,7 +50,7 @@ export default function CommandBar({ open, setOpen, onNavigate }: CommandBarProp
               <li key={c.id}>
                 <button
                   className="w-full text-left px-4 py-3 hover:bg-surface"
-                  onClick={() => { setOpen(false); onNavigate(c.id); }}
+                  onClick={() => { setOpen(false); if (c.id === 'toggle-theme') { onToggleTheme?.(); } else { onNavigate(c.id); } }}
                 >{c.label}</button>
               </li>
             ))}

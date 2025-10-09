@@ -53,6 +53,7 @@ export default function Pomodoro({ onFocusComplete, id }: PomodoroProps) {
       const nextXp = currentXp + points;
       localStorage.setItem("focus_xp", String(nextXp));
       onFocusComplete?.(points);
+      notify("Foco concluído", `+${points} XP`);
       if (cfg.breakMin > 0) {
         setOnBreak(true);
         setSecondsLeft(cfg.breakMin * 60);
@@ -66,6 +67,7 @@ export default function Pomodoro({ onFocusComplete, id }: PomodoroProps) {
       setOnBreak(false);
       setRunning(false);
       setSecondsLeft(cfg.focusMin * 60);
+      notify("Intervalo concluído", "Vamos voltar ao foco");
     }
   }, [secondsLeft, onBreak, cfg.points, cfg.breakMin, cfg.focusMin, onFocusComplete]);
 
@@ -112,4 +114,26 @@ export default function Pomodoro({ onFocusComplete, id }: PomodoroProps) {
       </div>
     </section>
   );
+}
+
+function notify(title: string, desc?: string) {
+  try {
+    if (navigator?.vibrate) navigator.vibrate(80);
+    // simple beep using WebAudio
+    const ctx = (window as any).audioContext || new (window.AudioContext || (window as any).webkitAudioContext)();
+    ;(window as any).audioContext = ctx;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = 'sine';
+    o.frequency.value = 880;
+    o.connect(g); g.connect(ctx.destination);
+    g.gain.setValueAtTime(0.001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+    o.start(); o.stop(ctx.currentTime + 0.2);
+    // toast
+    const evt = new CustomEvent('focusos:toast', { detail: { id: `${Date.now()}-${Math.random()}`, title, description: desc, type: 'success' } });
+    // @ts-ignore
+    window.dispatchEvent(evt);
+  } catch {}
 }

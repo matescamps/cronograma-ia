@@ -7,6 +7,13 @@ html, body {
   @apply bg-base text-secondary antialiased;
 }
 
+[data-theme="dark"] body, [data-theme="dark"] html {
+  background: radial-gradient(1000px 600px at 20% -20%, rgba(37,99,235,.15), transparent 60%),
+              radial-gradient(800px 500px at 120% 20%, rgba(16,185,129,.12), transparent 60%),
+              #0B1020;
+  color: #E5E7EB;
+}
+
 .perspective { perspective: 1000px; }
 .transform-style-3d { transform-style: preserve-3d; }
 .rotate-y-180 { transform: rotateY(180deg); }
@@ -18,3 +25,19 @@ html, body {
 }
 
 :focus-visible { outline: 2px solid theme('colors.primary'); outline-offset: 2px; }
+
+/* Glass card & tilt micro-interaction */
+.glass {
+  background: rgba(255,255,255,0.75);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(229,231,235,.7);
+}
+[data-theme="dark"] .glass {
+  background: rgba(17,24,39,0.55);
+  border-color: rgba(255,255,255,.1);
+}
+.tilt {
+  transition: transform .12s ease;
+  will-change: transform;
+}
+.tilt:hover { transform: perspective(800px) rotateX(2deg) rotateY(-2deg); }

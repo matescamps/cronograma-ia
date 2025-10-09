@@ -8,6 +8,10 @@ import Pomodoro from '../components/Pomodoro';
 import Quiz from '../components/Quiz';
 import HistoryChart from '../components/HistoryChart';
 import CommandBar from '../components/CommandBar';
+import LevelBadge from '../components/LevelBadge';
+import AssistantAvatar from '../components/AssistantAvatar';
+import Confetti from '../components/Confetti';
+import useToasts from '../components/Toast';
 
 interface Task {
   'Data': string;
@@ -22,6 +26,7 @@ interface CoachAdvice {
 }
 
 export default function FocusOS() {
+  const { Toasts } = useToasts();
   const [user, setUser] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -29,8 +34,11 @@ export default function FocusOS() {
   const [streakDays, setStreakDays] = useState<number>(0);
   const [xp, setXp] = useState<number>(0);
   const [insights, setInsights] = useState<string | null>(null);
+  const [burst, setBurst] = useState(0);
   const [commandOpen, setCommandOpen] = useState(false);
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => (typeof window !== 'undefined' ? ((localStorage.getItem('focus_theme') as any) || 'light') : 'light'));
+  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem('focus_theme', theme); }, [theme]);
 
   const currentPeriod = useMemo(() => {
     const hour = new Date().getHours();
@@ -110,17 +118,24 @@ export default function FocusOS() {
   return (
     <main className="max-w-5xl mx-auto p-4 md:p-8 animate-fade-in">
       <Header user={user} streakDays={streakDays} xp={xp} onLogout={() => { setUser(null); localStorage.removeItem('focus_user'); }} />
-      <CommandBar open={commandOpen} setOpen={setCommandOpen} onNavigate={onNavigate} />
-      {insights && (
-        <div className="mb-6 bg-white border border-panel rounded-2xl p-4">
+      <CommandBar open={commandOpen} setOpen={setCommandOpen} onNavigate={onNavigate} onToggleTheme={() => setTheme(t => t === 'light' ? 'dark' : 'light')} />
+      <div className="mb-6 glass rounded-2xl p-4 flex items-start justify-between gap-4 tilt">
+        <div className="flex-1">
           <h3 className="font-semibold text-secondary mb-1">Insights do Dia</h3>
-          <p className="text-muted">{insights}</p>
+          <p className="text-muted">{insights || 'Sem dados por enquanto.'}</p>
         </div>
-      )}
+        <AssistantAvatar thinking={loading} />
+      </div>
       {loading && <StatusDisplay message="Sincronizando com o satélite de missões..." />}
       {error && <StatusDisplay message={`ERRO DE CONEXÃO: ${error}`} isError />}
       {!loading && !error && (
-        <MissionControl tasks={tasks} period={currentPeriod} onComplete={() => { incrementStreak(setStreakDays); refreshXp(); }} apiUrl={apiUrl} user={user} onXpChange={refreshXp} />
+        <MissionControl tasks={tasks} period={currentPeriod} onComplete={() => { 
+          incrementStreak(setStreakDays); refreshXp(); setBurst((b) => b + 1);
+          // Toast achievement
+          const evt = new CustomEvent('focusos:toast', { detail: { id: `done-${Date.now()}`, title: 'Missão concluída', description: '+10 XP e +1 streak', type: 'success' } });
+          // @ts-ignore
+          window.dispatchEvent(evt);
+        }} apiUrl={apiUrl} user={user} onXpChange={refreshXp} />
       )}
       {!loading && !error && (
         <div className="mt-8 grid grid-cols-1 gap-6">
@@ -128,6 +143,8 @@ export default function FocusOS() {
           <HistoryChart id="history-section" user={user} apiUrl={apiUrl} />
         </div>
       )}
+      <Confetti burst={burst} />
+      <Toasts />
     </main>
   );
 }
@@ -152,13 +169,13 @@ const Header = ({ user, streakDays, xp, onLogout }: { user: string; streakDays: 
       <div className="flex items-center gap-3 text-sm mt-1">
         <StatusPill label="Planilha" colorClass="bg-success" stateKey="sheet" />
         <StatusPill label="IA" colorClass="bg-success" stateKey="ia" />
-        <div className="flex items-center gap-1 text-muted">
-          <span className="">🔥 Sequência de Foco:</span>
-          <span className="font-semibold text-secondary">{streakDays} dias</span>
-        </div>
-        <div className="flex items-center gap-1 text-muted">
-          <span>⭐ XP:</span>
-          <span className="font-semibold text-secondary">{xp}</span>
+        <div className="flex items-center gap-3 text-muted">
+          <div className="flex items-center gap-1">
+            <span>🔥</span>
+            <span>Sequência:</span>
+            <span className="font-semibold text-secondary">{streakDays}d</span>
+          </div>
+          <LevelBadge xp={xp} />
         </div>
         <kbd className="ml-2 px-2 py-0.5 rounded bg-surface border border-panel text-xs">Ctrl/⌘+K</kbd>
       </div>
