@@ -181,6 +181,46 @@ def get_coach_advice(request: CoachRequest):
         return {"summary": f"// TRANSMISSÃO INTERROMPIDA // Plano de contingência para {request.subject}: Focar nos fundamentos. Revisar por 20min, praticar por 30min.", "flashcards": [{"q": "Principal objetivo?", "a": "Entender o conceito central."}, {"q": "O que evitar?", "a": "Distrações."}]}
 
 
+class AskRequest(BaseModel):
+    message: str
+    user: str | None = None
+    context: dict | None = None
+
+
+@app.post("/ask", response_model=dict)
+def ask_ai(req: AskRequest):
+    """Endpoint de chat livre com a IA (resposta em texto)."""
+    base_system = (
+        "Você é o assistente 'System Coach' do Focus OS. Responda de forma clara,"
+        " objetiva e motivadora. Se relevante, sugira 2-3 passos práticos."
+    )
+    try:
+        if not GROQ_API_KEY:
+            return {"answer": "IA offline no momento. Tente novamente mais tarde."}
+        headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+        messages = [
+            {"role": "system", "content": base_system},
+            {"role": "user", "content": req.message},
+        ]
+        payload = {
+            "model": "gemma2-9b-it",
+            "messages": messages,
+            "temperature": 0.6,
+        }
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=20,
+        )
+        response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"]
+        return {"answer": content}
+    except Exception as e:
+        logger.error("Falha em /ask: %s", e)
+        return {"answer": "Desculpe, houve um erro ao processar sua pergunta. Tente novamente."}
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     logger.info("Iniciando Focus OS API...")

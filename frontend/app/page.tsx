@@ -70,13 +70,14 @@ export default function FocusOS() {
   if (!user) return <LoginScreen onLogin={setUser} />;
 
   return (
-    <main className="max-w-5xl mx-auto p-4 md:p-8 animate-fade-in">
+    <main className="relative max-w-6xl mx-auto p-4 md:p-8 animate-fade-in">
       <Header user={user} streakDays={streakDays} onLogout={() => setUser(null)} />
       {loading && <StatusDisplay message="Sincronizando com o satélite de missões..." />}
       {error && <StatusDisplay message={`ERRO DE CONEXÃO: ${error}`} isError />}
       {!loading && !error && (
         <MissionControl tasks={tasks} period={currentPeriod} onComplete={() => incrementStreak(setStreakDays)} />
       )}
+      <AssistantWidget />
     </main>
   );
 }
@@ -136,16 +137,20 @@ const MissionControl = ({ tasks, period, onComplete }: { tasks: Task[]; period: 
   }
   
   const { task, activePeriod } = currentTask;
-  const subject = task[`Matéria (${activePeriod})` as keyof Task];
-  const activity = task[`Atividade Detalhada (${activePeriod})` as keyof Task];
+  const subject = task[`Matéria (${activePeriod})` as keyof Task] as string;
+  const activity = task[`Atividade Detalhada (${activePeriod})` as keyof Task] as string;
+  const planned = Number(task[`Questões Planejadas (${activePeriod})` as keyof Task] || 0);
+  const done = Number(task[`Questões Feitas (${activePeriod})` as keyof Task] || 0);
+  const pctStr = String(task[`% Concluído (${activePeriod})` as keyof Task] || '').replace('%','');
+  const percent = isFinite(Number(pctStr)) ? Number(pctStr) : (planned > 0 ? Math.min(100, Math.round((done / planned) * 100)) : 0);
 
-  return <MissionCard subject={subject} activity={activity} onComplete={onComplete} />;
+  return <MissionCard subject={subject} activity={activity} initialProgress={percent} onComplete={onComplete} />;
 };
 
-const MissionCard = ({ subject, activity, onComplete }: { subject: string; activity: string; onComplete: () => void }) => {
+const MissionCard = ({ subject, activity, initialProgress = 0, onComplete }: { subject: string; activity: string; initialProgress?: number; onComplete: () => void }) => {
   const [advice, setAdvice] = useState<CoachAdvice | null>(null);
   const [loading, setLoading] = useState(true);
-  const [progress, setProgress] = useState<number>(0);
+  const [progress, setProgress] = useState<number>(initialProgress);
 
   useEffect(() => {
     const fetchAdvice = async () => {
@@ -175,6 +180,7 @@ const MissionCard = ({ subject, activity, onComplete }: { subject: string; activ
       <div className="h-2 w-full bg-panel rounded-full overflow-hidden mb-6">
         <div className="h-full bg-primary transition-all" style={{ width: `${progress}%` }} />
       </div>
+      <div className="text-xs text-muted mb-4">Progresso: {progress}%</div>
 
       {loading && <div className="text-center p-4 bg-panel rounded-md text-muted animate-pulse">Recebendo transmissão do System Coach...</div>}
       {advice && (
@@ -203,12 +209,15 @@ const Flashcard = ({ front, back }: { front: string; back: string }) => {
   const [isFlipped, setIsFlipped] = useState(false);
   return (
     <div className="perspective h-40" onClick={() => setIsFlipped(!isFlipped)}>
-      <div className={clsx("relative w-full h-full transform-style-3d transition-transform duration-700", isFlipped && "rotate-y-180")}> 
-        <div className="absolute w-full h-full backface-hidden flex items-center justify-center p-4 rounded-xl bg-surface border border-panel text-center cursor-pointer shadow-sm">
-          <p className="text-secondary">{front}</p>
+      <div className={clsx(
+        "relative w-full h-full transform-style-3d transition-transform duration-700",
+        isFlipped && "rotate-y-180"
+      )}>
+        <div className="absolute w-full h-full backface-hidden flex items-center justify-center p-4 rounded-xl bg-surface border border-panel text-center cursor-pointer shadow-sm hover:shadow-md">
+          <p className="text-secondary select-none">{front}</p>
         </div>
-        <div className="absolute w-full h-full backface-hidden flex items-center justify-center p-4 rounded-xl bg-primary text-white text-center cursor-pointer rotate-y-180 shadow-sm">
-          <p className="font-semibold">{back}</p>
+        <div className="absolute w-full h-full backface-hidden flex items-center justify-center p-4 rounded-xl bg-primary text-white text-center cursor-pointer rotate-y-180 shadow-[0_0_30px_rgba(37,99,235,0.4)]">
+          <p className="font-semibold select-none">{back}</p>
         </div>
       </div>
     </div>
@@ -274,5 +283,63 @@ function PlanList({ summary }: { summary: string }) {
         <li key={idx}>{step}</li>
       ))}
     </ol>
+  );
+}
+
+function AssistantWidget() {
+  const [open, setOpen] = useState(false);
+  const [input, setInput] = useState('');
+  const [messages, setMessages] = useState<{ role: 'user'|'ai'; content: string }[]>([]);
+  const [sending, setSending] = useState(false);
+
+  const send = async () => {
+    if (!input.trim() || sending) return;
+    const question = input.trim();
+    setMessages(m => [...m, { role: 'user', content: question }]);
+    setInput('');
+    setSending(true);
+    try {
+      const apiUrl = resolveApiUrl();
+      const resp = await fetch(`${apiUrl}/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: question })
+      });
+      const data = await resp.json();
+      setMessages(m => [...m, { role: 'ai', content: data.answer || '...' }]);
+    } catch {
+      setMessages(m => [...m, { role: 'ai', content: 'Falha ao contatar a IA.' }]);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="fixed bottom-6 right-6">
+      {!open ? (
+        <button onClick={() => setOpen(true)} className="rounded-full h-14 w-14 shadow-lg bg-primary text-white text-2xl flex items-center justify-center hover:shadow-xl transition-all">✦</button>
+      ) : (
+        <div className="w-[min(90vw,360px)] bg-white border border-panel rounded-2xl shadow-xl overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-panel bg-surface">
+            <span className="font-semibold text-secondary">System Coach</span>
+            <button className="text-muted hover:text-primary" onClick={() => setOpen(false)}>Fechar</button>
+          </div>
+          <div className="max-h-80 overflow-auto p-4 space-y-3">
+            {messages.length === 0 && (
+              <div className="text-sm text-muted">Pergunte qualquer coisa sobre seu estudo. Ex: "Como revisar Matemática em 30 minutos?"</div>
+            )}
+            {messages.map((m, i) => (
+              <div key={i} className={clsx('text-sm', m.role === 'user' ? 'text-secondary' : 'text-muted')}>
+                {m.role === 'user' ? 'Você: ' : 'Coach: '} {m.content}
+              </div>
+            ))}
+          </div>
+          <div className="p-3 flex items-center gap-2">
+            <input className="flex-1 border border-panel rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-primary" placeholder="Escreva sua pergunta..." value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()} />
+            <button onClick={send} disabled={sending} className="px-3 py-2 rounded-lg bg-primary text-white disabled:opacity-50">Enviar</button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
