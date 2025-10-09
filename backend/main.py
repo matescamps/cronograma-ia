@@ -254,11 +254,15 @@ def get_today_tasks(user: str):
         if df.empty: return []
         
         today = date.today()
-        df_today = df[df['Data'].dt.date == today]
-        df_user_today = df_today[
-            (df_today['Aluno(a)'].str.lower() == user.lower()) | 
-            (df_today['Aluno(a)'].str.lower() == 'ambos')
-        ].fillna('').to_dict('records')
+        df_today = df[df.get('Data', pd.Series(dtype='datetime64[ns]')).dt.date == today] if 'Data' in df.columns else df
+        if 'Aluno(a)' in df_today.columns:
+            df_user_today = df_today[
+                (df_today['Aluno(a)'].str.lower() == user.lower()) |
+                (df_today['Aluno(a)'].str.lower() == 'ambos')
+            ]
+        else:
+            df_user_today = df_today
+        df_user_today = df_user_today.fillna('').to_dict('records')
         
         return df_user_today
     except Exception as e:
@@ -351,7 +355,23 @@ def ask_quiz(req: AskRequest):
         }
         response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=20)
         response.raise_for_status()
-        return json.loads(response.json()["choices"][0]["message"]["content"])  # type: ignore[index]
+        data = json.loads(response.json()["choices"][0]["message"]["content"])  # type: ignore[index]
+        # Normalize shape for frontend robustness
+        questions = data.get("questions") or []
+        normalized = []
+        for q in questions:
+            qtype = "truefalse" if str(q.get("type", "")).lower() == "truefalse" else "mcq"
+            ans = str(q.get("answer", "")).strip().lower()
+            if qtype == "truefalse":
+                ans = "true" if ans in {"true", "verdadeiro", "v"} else "false"
+            normalized.append({
+                "type": qtype,
+                "question": str(q.get("question", "")),
+                "options": q.get("options"),
+                "answer": ans if qtype == "truefalse" else q.get("answer"),
+                "explanation": q.get("explanation"),
+            })
+        return {"questions": normalized}
     except Exception as e:
         logger.warning("Falha no /ask (fallback): %s", e)
         # Fallback simples

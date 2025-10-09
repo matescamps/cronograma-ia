@@ -1,6 +1,45 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+:root[data-theme='light']{
+  --color-primary: 37 99 235;
+  --color-surface: 248 250 252;
+  --color-panel: 229 231 235;
+  --color-secondary: 17 24 39;
+  --color-muted: 107 114 128;
+  --color-success: 34 197 94;
+}
+:root[data-theme='dark']{
+  --color-primary: 96 165 250;
+  --color-surface: 15 23 42;
+  --color-panel: 30 41 59;
+  --color-secondary: 226 232 240;
+  --color-muted: 148 163 184;
+  --color-success: 34 197 94;
+}
+
+.text-secondary{ color: rgb(var(--color-secondary)); }
+.text-muted{ color: rgb(var(--color-muted)); }
+.bg-surface{ background-color: rgb(var(--color-surface)); }
+.bg-primary{ background-color: rgb(var(--color-primary)); }
+.bg-panel{ background-color: rgb(var(--color-panel)); }
+.border-panel{ border-color: rgb(var(--color-panel)); }
+.bg-success{ background-color: rgb(var(--color-success)); }
+
+.glass{
+  background: linear-gradient(180deg, rgba(255,255,255,0.65), rgba(255,255,255,0.35));
+  backdrop-filter: blur(10px);
+}
+
+.animate-fade-in{ animation: fade-in .25s ease-out both; }
+@keyframes fade-in{ from{opacity:0; transform: translateY(4px)} to{opacity:1; transform:none} }
+
+.perspective{ perspective: 1000px; }
+.transform-style-3d{ transform-style: preserve-3d; }
+.backface-hidden{ backface-visibility: hidden; }
+.rotate-y-180{ transform: rotateY(180deg); }
+
+.tilt{ transform: perspective(1000px) rotateX(1deg); }
 
 /* Base document styles for the Light theme */
 html, body {
@@ -8,8 +47,10 @@ html, body {
   background:
     radial-gradient(1100px 650px at -10% -10%, rgba(37,99,235,.08), transparent 60%),
     radial-gradient(900px 550px at 120% 0%, rgba(16,185,129,.08), transparent 60%),
-    #F7F9FC;
-  @apply text-secondary antialiased;
+    rgb(var(--color-surface));
+  color: rgb(var(--color-secondary));
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 [data-theme="dark"] body, [data-theme="dark"] html {

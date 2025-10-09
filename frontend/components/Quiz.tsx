@@ -27,6 +27,25 @@ export default function Quiz({ user, subject, apiUrl, id }: QuizProps) {
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [showResult, setShowResult] = useState(false);
 
+  const normalizeQuestions = (raw: any): Question[] => {
+    const arr = Array.isArray(raw?.questions) ? raw.questions : [];
+    return arr.map((q: any) => {
+      const type = q?.type === 'truefalse' ? 'truefalse' : 'mcq';
+      const answer = String(q?.answer ?? '').toLowerCase();
+      let normalizedAnswer = q?.answer;
+      if (type === 'truefalse') {
+        normalizedAnswer = answer === 'true' || answer === 'verdadeiro' ? 'true' : 'false';
+      }
+      return {
+        type,
+        question: String(q?.question ?? ''),
+        options: Array.isArray(q?.options) ? q.options : undefined,
+        answer: normalizedAnswer,
+        explanation: q?.explanation ? String(q.explanation) : undefined,
+      } as Question;
+    }).filter((q: Question) => q.question);
+  };
+
   const generate = async () => {
     setLoading(true);
     setShowResult(false);
@@ -39,7 +58,7 @@ export default function Quiz({ user, subject, apiUrl, id }: QuizProps) {
         body: JSON.stringify({ topic, count, mode }),
       });
       const data = await res.json();
-      setQuestions(data.questions || []);
+      setQuestions(normalizeQuestions(data));
     } catch (e) {
       setQuestions([]);
     } finally {

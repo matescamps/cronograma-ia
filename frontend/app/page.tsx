@@ -10,7 +10,9 @@ import HistoryChart from '../components/HistoryChart';
 import CommandBar from '../components/CommandBar';
 import LevelBadge from '../components/LevelBadge';
 import AssistantAvatar from '../components/AssistantAvatar';
+import GreetingPopup from '../components/GreetingPopup';
 import Confetti from '../components/Confetti';
+import AssistantDock from '../components/AssistantDock';
 import useToasts from '../components/Toast';
 
 interface Task {
@@ -123,6 +125,7 @@ export default function FocusOS() {
 
   return (
     <main className="max-w-5xl mx-auto p-4 md:p-8 animate-fade-in">
+      <GreetingPopup user={user} tasks={tasks as any} currentPeriod={currentPeriod as any} apiUrl={apiUrl} />
       <Header user={user} streakDays={streakDays} xp={xp} onLogout={() => { setUser(null); localStorage.removeItem('focus_user'); }} />
       <CommandBar open={commandOpen} setOpen={setCommandOpen} onNavigate={onNavigate} onToggleTheme={() => setTheme(t => t === 'light' ? 'dark' : 'light')} />
       <div className="mb-6 glass rounded-2xl p-4 flex items-start justify-between gap-4 tilt">
@@ -150,6 +153,7 @@ export default function FocusOS() {
         </div>
       )}
       <Confetti burst={burst} />
+      <AssistantDock apiUrl={apiUrl} />
       <Toasts />
     </main>
   );
