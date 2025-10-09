@@ -22,9 +22,7 @@ def connect_to_google_sheets():
         scopes = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds_info = st.secrets["gcp_service_account"]
 
-        # --- CORREÇÃO ADICIONADA ---
         # Verifica se as credenciais foram coladas como uma string JSON no secrets.toml.
-        # Se sim, converte para um dicionário para evitar o erro "'str' object has no attribute 'keys'".
         if isinstance(creds_info, str):
             try:
                 creds_dict = json.loads(creds_info)
@@ -33,7 +31,6 @@ def connect_to_google_sheets():
                 return None
         else:
             creds_dict = creds_info
-        # --- FIM DA CORREÇÃO ---
 
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
@@ -44,10 +41,10 @@ def connect_to_google_sheets():
 
 # --- Carregamento e Cache dos Dados da Planilha ---
 @st.cache_data(ttl=60)
-def load_data(_client, spreadsheet_id):
+def load_data(_client, spreadsheet_id, sheet_tab_name):
     try:
         spreadsheet = _client.open_by_key(spreadsheet_id)
-        worksheet = spreadsheet.worksheet("Schedule") # Nome da sua aba
+        worksheet = spreadsheet.worksheet(sheet_tab_name) # CORREÇÃO: Usa o nome da aba do secrets.toml
         df = pd.DataFrame(worksheet.get_all_records())
         
         # Tratamento de dados para garantir os tipos corretos
@@ -59,7 +56,7 @@ def load_data(_client, spreadsheet_id):
                 df[col] = df[col].apply(lambda x: True if str(x).upper() == 'TRUE' else False)
         return df, worksheet
     except gspread.exceptions.WorksheetNotFound:
-        st.error("Erro: A aba 'Schedule' não foi encontrada na sua planilha. Por favor, verifique o nome.")
+        st.error(f"Erro: A aba '{sheet_tab_name}' não foi encontrada na sua planilha. Por favor, verifique o nome em secrets.toml.")
         return pd.DataFrame(), None
     except Exception as e:
         st.error(f"Erro ao carregar os dados da planilha: {e}")
@@ -73,14 +70,15 @@ def call_groq_api(prompt):
             "messages": [{"role": "user", "content": prompt}]
         }
         headers = {
-            "Authorization": "Bearer " + st.secrets["groq"]["api_key"],
+            # CORREÇÃO: Usa a chave correta do secrets.toml
+            "Authorization": "Bearer " + st.secrets["GROQ_API_KEY"],
             "Content-Type": "application/json"
         }
         response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
         if response.status_code == 200:
             return response.json()['choices'][0]['message']['content']
         else:
-            st.warning(f"A IA não respondeu (Código: {response.status_code}). Verifique sua chave da Groq em 'secrets.toml'.")
+            st.warning(f"A IA não respondeu (Código: {response.status_code}). Verifique sua chave GROQ_API_KEY em 'secrets.toml'.")
             return "Não foi possível obter um conselho da IA no momento."
     except Exception as e:
         st.error(f"Erro crítico na conexão com a IA: {e}")
@@ -139,8 +137,10 @@ def main():
     client = connect_to_google_sheets()
     if not client: return
 
-    spreadsheet_id = st.secrets["google_sheets"]["spreadsheet_id"]
-    df, worksheet = load_data(client, spreadsheet_id)
+    # CORREÇÃO: Usa as chaves corretas do secrets.toml
+    spreadsheet_id = st.secrets["SPREADSHEET_ID_OR_URL"]
+    sheet_tab_name = st.secrets["SHEET_TAB_NAME"]
+    df, worksheet = load_data(client, spreadsheet_id, sheet_tab_name)
 
     if df.empty: return
 
@@ -160,8 +160,8 @@ def main():
             hora_atual = datetime.now().hour
             saudacao = "Bom dia" if 5 <= hora_atual < 12 else "Boa tarde" if hora_atual < 18 else "Boa noite"
             
-            progresso_manha = row['% Concluído (Manhã)'] * 100 if '% Concluído (Manhã)' in row else 0
-            tarefa_manha = row['Atividade Detalhada (Manhã)']
+            progresso_manha = row.get('% Concluído (Manhã)', 0) * 100
+            tarefa_manha = row.get('Atividade Detalhada (Manhã)', 'N/A')
 
             prompt = f"""
             Você é um coach de vestibulandos de medicina. O momento atual é {saudacao}. 
@@ -202,7 +202,7 @@ def main():
                         value=int(row[feitas_col]), key=f"feitas_{periodo}"
                     )
                 
-                progresso = row[f'% Concluído ({periodo})']
+                progresso = row.get(f'% Concluído ({periodo})', 0)
                 cor_barra = "#1e8e3e" if progresso > 0.8 else "#f9ab00" if progresso > 0.4 else "#d93025"
                 st.markdown(f'<style>.stProgress > div > div > div > div {{background-color: {cor_barra};}}</style>', unsafe_allow_html=True)
                 st.progress(progresso)
@@ -216,7 +216,6 @@ def main():
             
             updates = []
             
-            # Mapeamento de colunas da planilha
             col_map = {
                 'Manhã': {'teoria': 'I', 'feitas': 'K'},
                 'Tarde': {'teoria': 'O', 'feitas': 'Q'},
@@ -236,7 +235,7 @@ def main():
                 worksheet.batch_update(updates)
                 st.success("Progresso salvo com sucesso!")
                 time.sleep(1)
-                st.cache_data.clear() # Limpa o cache para forçar a releitura dos dados
+                st.cache_data.clear()
                 st.rerun()
             else:
                 st.error("Não foi possível salvar. A conexão com a planilha falhou.")
