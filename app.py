@@ -44,7 +44,7 @@ def connect_to_google_sheets():
 def load_data(_client, spreadsheet_id, sheet_tab_name):
     try:
         spreadsheet = _client.open_by_key(spreadsheet_id)
-        worksheet = spreadsheet.worksheet(sheet_tab_name) # CORREÇÃO: Usa o nome da aba do secrets.toml
+        worksheet = spreadsheet.worksheet(sheet_tab_name) 
         df = pd.DataFrame(worksheet.get_all_records())
         
         # Tratamento de dados para garantir os tipos corretos
@@ -54,6 +54,21 @@ def load_data(_client, spreadsheet_id, sheet_tab_name):
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
             if 'Teoria Feita' in col:
                 df[col] = df[col].apply(lambda x: True if str(x).upper() == 'TRUE' else False)
+            
+            # --- CORREÇÃO ADICIONADA AQUI ---
+            # Normaliza as colunas de porcentagem para o intervalo [0.0, 1.0]
+            if '% Concluído' in col:
+                # Converte para string, remove '%' e troca vírgula por ponto para garantir a conversão.
+                df[col] = df[col].astype(str).str.replace('%', '', regex=False).str.replace(',', '.', regex=False)
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                
+                # Se os valores forem maiores que 1 (ex: 100 para 100%), normaliza para a escala 0-1.
+                # A função st.progress() requer valores float entre 0.0 e 1.0.
+                df.loc[df[col] > 1, col] = df.loc[df[col] > 1, col] / 100.0
+                # Garante que o valor não ultrapasse 1.0
+                df.loc[df[col] > 1, col] = 1.0
+
+
         return df, worksheet
     except gspread.exceptions.WorksheetNotFound:
         st.error(f"Erro: A aba '{sheet_tab_name}' não foi encontrada na sua planilha. Por favor, verifique o nome em secrets.toml.")
@@ -70,15 +85,18 @@ def call_groq_api(prompt):
             "messages": [{"role": "user", "content": prompt}]
         }
         headers = {
-            # CORREÇÃO: Usa a chave correta do secrets.toml
             "Authorization": "Bearer " + st.secrets["GROQ_API_KEY"],
             "Content-Type": "application/json"
         }
         response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
+        
         if response.status_code == 200:
             return response.json()['choices'][0]['message']['content']
+        elif response.status_code == 401:
+            st.error("Erro de Autenticação (401): Sua chave da Groq (GROQ_API_KEY) é inválida ou expirou. Por favor, gere uma nova chave no site da Groq e atualize seu arquivo 'secrets.toml'.")
+            return "Erro de autenticação com a IA."
         else:
-            st.warning(f"A IA não respondeu (Código: {response.status_code}). Verifique sua chave GROQ_API_KEY em 'secrets.toml'.")
+            st.warning(f"A IA não respondeu (Código: {response.status_code}). Verifique sua chave GROQ_API_KEY em 'secrets.toml'. Detalhes: {response.text}")
             return "Não foi possível obter um conselho da IA no momento."
     except Exception as e:
         st.error(f"Erro crítico na conexão com a IA: {e}")
@@ -137,7 +155,6 @@ def main():
     client = connect_to_google_sheets()
     if not client: return
 
-    # CORREÇÃO: Usa as chaves corretas do secrets.toml
     spreadsheet_id = st.secrets["SPREADSHEET_ID_OR_URL"]
     sheet_tab_name = st.secrets["SHEET_TAB_NAME"]
     df, worksheet = load_data(client, spreadsheet_id, sheet_tab_name)
