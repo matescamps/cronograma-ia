@@ -37,7 +37,13 @@ export default function FocusOS() {
   const [burst, setBurst] = useState(0);
   const [commandOpen, setCommandOpen] = useState(false);
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => (typeof window !== 'undefined' ? ((localStorage.getItem('focus_theme') as any) || 'light') : 'light'));
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    if (typeof window === 'undefined') return 'light';
+    const stored = localStorage.getItem('focus_theme') as 'light' | 'dark' | null;
+    if (stored) return stored;
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return prefersDark ? 'dark' : 'light';
+  });
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem('focus_theme', theme); }, [theme]);
 
   const currentPeriod = useMemo(() => {
