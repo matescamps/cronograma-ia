@@ -14,6 +14,8 @@ interface CoachAdvice {
   summary: string;
   flashcards: { q: string; a: string; }[];
 }
+interface PeriodSummary { period: string; subject: string; activity: string; planned: number; done: number; percent: number }
+interface Summary { user: string; date: string; periods: PeriodSummary[]; overall: { percent: number; planned: number; done: number }; meta: { difficulty: number; priority: string; status: string; alert: string; phase: string; weekday: string; exam: string } }
 
 export default function FocusOS() {
   const [user, setUser] = useState<string | null>(null);
@@ -21,6 +23,11 @@ export default function FocusOS() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [streakDays, setStreakDays] = useState<number>(0);
+  const [summary, setSummary] = useState<Summary | null>(null);
+  const [xp, setXp] = useState<number>(0);
+  const [achievements, setAchievements] = useState<string[]>([]);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
 
   const currentPeriod = useMemo(() => {
     const hour = new Date().getHours();
@@ -32,6 +39,20 @@ export default function FocusOS() {
   useEffect(() => {
     const stored = Number(localStorage.getItem('focus_streak') || '0');
     setStreakDays(stored);
+    const lastUser = localStorage.getItem('focus_user');
+    if (lastUser) setUser(lastUser);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const isCmdK = (e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'k');
+      if (isCmdK) {
+        e.preventDefault();
+        setCommandOpen(v => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   useEffect(() => {
@@ -64,20 +85,42 @@ export default function FocusOS() {
         }
       };
       fetchTasks();
+      const fetchSummary = async () => {
+        try {
+          const apiUrl = resolveApiUrl();
+          const resp = await fetch(`${apiUrl}/summary/${user}`);
+          setSummary(await resp.json());
+        } catch {}
+      };
+      fetchSummary();
     }
   }, [user]);
 
-  if (!user) return <LoginScreen onLogin={setUser} />;
+  if (!user) return <LoginScreen onLogin={(u) => { setUser(u); localStorage.setItem('focus_user', u); }} />;
 
   return (
     <main className="relative max-w-6xl mx-auto p-4 md:p-8 animate-fade-in">
-      <Header user={user} streakDays={streakDays} onLogout={() => setUser(null)} />
+      <div className="animated-bg" />
+      <Header user={user} streakDays={streakDays} onLogout={() => { setUser(null); localStorage.removeItem('focus_user'); }} />
+      <AchievementsBar xp={xp} achievements={achievements} />
       {loading && <StatusDisplay message="Sincronizando com o satélite de missões..." />}
       {error && <StatusDisplay message={`ERRO DE CONEXÃO: ${error}`} isError />}
       {!loading && !error && (
-        <MissionControl tasks={tasks} period={currentPeriod} onComplete={() => incrementStreak(setStreakDays)} />
+        <>
+          <MissionControl tasks={tasks} period={currentPeriod} onComplete={() => handleComplete(setStreakDays, setXp, setAchievements, summary)} />
+          <InsightsPanel summary={summary} />
+        </>
       )}
-      <AssistantWidget />
+      <AssistantWidget open={assistantOpen} setOpen={setAssistantOpen} />
+      <CommandBar
+        open={commandOpen}
+        setOpen={setCommandOpen}
+        actions={[
+          { name: 'Abrir Chat do Coach', run: () => { setAssistantOpen(true); setCommandOpen(false); } },
+          { name: 'Recarregar Dados', run: () => { window.location.reload(); } },
+          { name: 'Trocar Operador', run: () => { localStorage.removeItem('focus_user'); setUser(null); } },
+        ]}
+      />
     </main>
   );
 }
@@ -170,6 +213,7 @@ const MissionCard = ({ subject, activity, initialProgress = 0, onComplete }: { s
 
   const completeTask = () => {
     onComplete();
+    fireConfetti();
   };
 
   return (
@@ -268,6 +312,89 @@ function resolveApiUrl(): string {
   return envUrl;
 }
 
+function fireConfetti() {
+  if (typeof window === 'undefined') return;
+  import('canvas-confetti').then(({ default: confetti }) => {
+    confetti({ particleCount: 80, spread: 60, origin: { y: 0.8 } });
+  }).catch(() => {});
+}
+
+function handleComplete(
+  setStreak: (updater: (prev: number) => number) => void,
+  setXp: (updater: (prev: number) => number) => void,
+  setAchievements: (updater: (prev: string[]) => string[]) => void,
+  summary: Summary | null
+) {
+  incrementStreak(setStreak);
+  const baseXp = 50;
+  const diff = summary?.meta?.difficulty || 0;
+  const gained = baseXp + Math.round(diff * 10);
+  const nextXp = (Number(localStorage.getItem('focus_xp') || '0') + gained);
+  localStorage.setItem('focus_xp', String(nextXp));
+  setXp(() => nextXp);
+  const unlocked: string[] = [];
+  if (nextXp >= 100 && !(localStorage.getItem('ach_first100'))) { localStorage.setItem('ach_first100', '1'); unlocked.push('Primeiros 100 XP'); }
+  const streak = Number(localStorage.getItem('focus_streak') || '0');
+  if (streak >= 3 && !(localStorage.getItem('ach_streak3'))) { localStorage.setItem('ach_streak3', '1'); unlocked.push('Trinca de Foco (3 dias)'); }
+  if (unlocked.length) setAchievements(prev => [...prev, ...unlocked]);
+}
+
+function AchievementsBar({ xp, achievements }: { xp: number; achievements: string[] }) {
+  const [loadedXp, setLoadedXp] = useState(0);
+  useEffect(() => {
+    const stored = Number(localStorage.getItem('focus_xp') || '0');
+    setLoadedXp(stored);
+  }, []);
+  const val = xp || loadedXp;
+  return (
+    <div className="mb-6 flex items-center gap-3 text-xs text-muted">
+      <div className="flex items-center gap-2">
+        <span className="px-2 py-1 rounded-full bg-surface border border-panel text-secondary">XP: {val}</span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {achievements.map((a, i) => (
+          <span key={i} className="px-2 py-1 rounded-full bg-surface border border-panel text-secondary">🏅 {a}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function InsightsPanel({ summary }: { summary: Summary | null }) {
+  if (!summary || !summary.periods?.length) return null;
+  return (
+    <section className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="bg-white border border-panel rounded-2xl p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-secondary mb-2">Visão Geral</h3>
+        <p className="text-muted text-sm mb-4">Hoje ({summary.meta.weekday}) • Dificuldade: {summary.meta.difficulty} • Prioridade: {summary.meta.priority || '—'}</p>
+        <div className="h-2 w-full bg-panel rounded-full overflow-hidden mb-2">
+          <div className="h-full bg-primary" style={{ width: `${summary.overall.percent}%` }} />
+        </div>
+        <div className="text-xs text-muted">Progresso geral: {summary.overall.percent}% • Questões: {summary.overall.done}/{summary.overall.planned}</div>
+        {summary.meta.alert && <div className="mt-3 text-xs text-muted">Alerta: {summary.meta.alert}</div>}
+      </div>
+      <div className="bg-white border border-panel rounded-2xl p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-secondary mb-4">Períodos</h3>
+        <div className="space-y-3">
+          {summary.periods.map((p, i) => (
+            <div key={i} className="">
+              <div className="flex justify-between text-sm mb-1">
+                <span className="text-secondary font-medium">{p.period}</span>
+                <span className="text-muted">{p.done}/{p.planned} • {p.percent}%</span>
+              </div>
+              <div className="h-1.5 w-full bg-panel rounded-full overflow-hidden">
+                <div className="h-full bg-primary" style={{ width: `${p.percent}%` }} />
+              </div>
+              <div className="text-xs text-muted mt-1">{p.subject || '—'}{p.activity ? ` — ${p.activity}` : ''}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+
 function PlanList({ summary }: { summary: string }) {
   if (!summary) return null;
   const items = summary
@@ -286,8 +413,7 @@ function PlanList({ summary }: { summary: string }) {
   );
 }
 
-function AssistantWidget() {
-  const [open, setOpen] = useState(false);
+function AssistantWidget({ open, setOpen }: { open: boolean; setOpen: (v: boolean) => void }) {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<{ role: 'user'|'ai'; content: string }[]>([]);
   const [sending, setSending] = useState(false);
@@ -340,6 +466,28 @@ function AssistantWidget() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function CommandBar({ open, setOpen, actions }: { open: boolean; setOpen: (v: boolean) => void; actions: { name: string; run: () => void }[] }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4" onClick={() => setOpen(false)}>
+      <div className="absolute inset-0 bg-black/20" />
+      <div className="relative w-[min(90vw,640px)] bg-white border border-panel rounded-2xl shadow-xl overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="px-4 py-3 border-b border-panel bg-surface flex items-center justify-between">
+          <span className="font-semibold text-secondary">Command Bar</span>
+          <span className="text-xs text-muted">Ctrl/⌘ + K</span>
+        </div>
+        <div className="p-2">
+          {actions.map((a, i) => (
+            <button key={i} onClick={() => a.run()} className="w-full text-left px-3 py-2 rounded-lg hover:bg-surface text-secondary">
+              {a.name}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

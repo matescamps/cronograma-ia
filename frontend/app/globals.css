@@ -11,3 +11,18 @@ html, body {
 .transform-style-3d { transform-style: preserve-3d; }
 .rotate-y-180 { transform: rotateY(180deg); }
 .backface-hidden { backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+
+/* Subtle animated sci-fi background */
+.animated-bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(800px 600px at 80% 10%, rgba(37,99,235,0.08), transparent 60%),
+              radial-gradient(600px 400px at 10% 80%, rgba(17,24,39,0.06), transparent 60%);
+  animation: bgPulse 8s ease-in-out infinite alternate;
+}
+
+@keyframes bgPulse {
+  0% { filter: saturate(100%) blur(0px); opacity: .9; }
+  100% { filter: saturate(120%) blur(1px); opacity: 1; }
+}

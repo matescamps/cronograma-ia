@@ -142,6 +142,87 @@ def get_data_as_dataframe() -> pd.DataFrame:
         logger.warning("Coluna 'Data' não encontrada na planilha. Datas serão ignoradas.")
     return df
 
+
+def _safe_number(value) -> float:
+    try:
+        if value is None:
+            return 0.0
+        if isinstance(value, (int, float)):
+            return float(value)
+        value_str = str(value).replace('%', '').strip()
+        if value_str == '':
+            return 0.0
+        return float(value_str)
+    except Exception:
+        return 0.0
+
+
+@app.get("/summary/{user}")
+def get_summary(user: str) -> dict:
+    """Resumo agregado do dia para o usuário: progresso por período e métricas gerais."""
+    df = get_data_as_dataframe()
+    if df.empty:
+        return {"user": user, "date": str(date.today()), "periods": [], "overall": {"percent": 0, "planned": 0, "done": 0}}
+
+    today = date.today()
+    df_today = df[df['Data'].dt.date == today]
+    df_user = df_today[(df_today['Aluno(a)'].str.lower() == user.lower()) | (df_today['Aluno(a)'].str.lower() == 'ambos')]
+    if df_user.empty:
+        return {"user": user, "date": str(today), "periods": [], "overall": {"percent": 0, "planned": 0, "done": 0}}
+
+    # Escolhe a primeira linha relevante (simplificação)
+    row = df_user.iloc[0]
+    periods = []
+    totals_planned = 0
+    totals_done = 0
+    percents = []
+    for period in ['Manhã', 'Tarde', 'Noite']:
+        subject = str(row.get(f"Matéria ({period})", '')).strip()
+        activity = str(row.get(f"Atividade Detalhada ({period})", '')).strip()
+        planned = _safe_number(row.get(f"Questões Planejadas ({period})", 0))
+        done = _safe_number(row.get(f"Questões Feitas ({period})", 0))
+        percent = _safe_number(row.get(f"% Concluído ({period})", 0))
+        if not percent and planned > 0:
+            percent = min(100.0, round((done / planned) * 100.0))
+        if subject or activity or planned or done or percent:
+            periods.append({
+                "period": period,
+                "subject": subject,
+                "activity": activity,
+                "planned": planned,
+                "done": done,
+                "percent": percent,
+            })
+            if planned or done:
+                totals_planned += planned
+                totals_done += done
+            if percent:
+                percents.append(percent)
+
+    overall_percent = round(sum(percents) / len(percents)) if percents else (round((totals_done / totals_planned) * 100) if totals_planned else 0)
+
+    summary = {
+        "user": user,
+        "date": str(today),
+        "periods": periods,
+        "overall": {
+            "percent": overall_percent,
+            "planned": totals_planned,
+            "done": totals_done,
+        },
+        "meta": {
+            "difficulty": _safe_number(row.get('Dificuldade (1-5)', 0)),
+            "priority": str(row.get('Prioridade', '')).strip(),
+            "status": str(row.get('Situação', '')).strip(),
+            "alert": str(row.get('Alerta/Comentário', '')).strip(),
+            "phase": str(row.get('Fase do Plano', '')).strip(),
+            "weekday": str(row.get('Dia da Semana', '')).strip(),
+            "exam": str(row.get('Exame', '')).strip(),
+        }
+    }
+
+    return summary
+
 @app.get("/")
 def read_root():
     return {"status": "Focus OS API online. Ready for duty."}
