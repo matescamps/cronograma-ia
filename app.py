@@ -523,7 +523,7 @@ def show_login_screen():
     <div class="login-container">
         <div class="login-card">
             <div class="login-logo">🎓</div>
-            <h1 class="login-title">StudyFlow Pro</h1>
+            <h1 class="login-title">Cronograma Ana&Mateus</h1>
             <p class="login-subtitle">Seu cronograma inteligente de estudos</p>
         </div>
     </div>
@@ -704,17 +704,17 @@ def show_dashboard(user):
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-            
-            # Barra de progresso
-            st.markdown(f"""
-            <div class="progress-container">
-                <div class="progress-label">Progresso do {periodo}: {progresso*100:.0f}%</div>
-                <div class="progress-bar-custom">
-                    <div class="progress-fill" style="width: {progresso*100}%"></div>
+                
+                # Barra de progresso
+                st.markdown(f"""
+                <div class="progress-container">
+                    <div class="progress-label">Progresso do {periodo}: {progresso*100:.0f}%</div>
+                    <div class="progress-bar-custom">
+                        <div class="progress-fill" style="width: {progresso*100}%"></div>
+                    </div>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
-            
+                """, unsafe_allow_html=True)
+                
             st.markdown("</div>", unsafe_allow_html=True)
 
     # Botão de salvar
