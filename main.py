@@ -1,0 +1,1 @@
+from backend.main import app  # re-export for Render `uvicorn main:app`

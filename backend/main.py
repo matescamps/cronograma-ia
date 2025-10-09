@@ -35,11 +35,6 @@ SPREADSHEET_IDENTIFIER = (
 SHEET_NAME = os.getenv("SHEET_TAB_NAME") or DEFAULT_SHEET_NAME
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-if not all([GCP_CREDS_JSON, GROQ_API_KEY]):
-    raise ValueError(
-        "ERRO CRÍTICO: Variáveis de ambiente ausentes. Defina GCP_SERVICE_ACCOUNT_JSON e GROQ_API_KEY."
-    )
-
 app = FastAPI(title="Focus OS API")
 
 app.add_middleware(
@@ -78,6 +73,9 @@ def init_gsheets_state() -> None:
     app.state.worksheet = None
     app.state.gs_last_error = None
     try:
+        if not GCP_CREDS_JSON:
+            logger.warning("Variável GCP_SERVICE_ACCOUNT_JSON ausente; pulando conexão ao Google Sheets.")
+            return
         logger.info("Inicializando autenticação com Google usando service account (email mascarado).")
         creds_dict = json.loads(GCP_CREDS_JSON)
         scopes = [
@@ -192,9 +190,13 @@ def on_startup() -> None:
     # Probe IA availability (non-fatal)
     app.state.ia_online = False
     try:
-        headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
-        resp = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=8)
-        app.state.ia_online = resp.ok
+        if GROQ_API_KEY:
+            headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+            resp = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=8)
+            app.state.ia_online = resp.ok
+        else:
+            app.state.ia_online = False
+            logger.warning("GROQ_API_KEY ausente; IA marcada como offline.")
         logger.info("IA Groq online: %s", app.state.ia_online)
     except Exception as e:
         logger.warning("Não foi possível verificar IA Groq: %s", e)
