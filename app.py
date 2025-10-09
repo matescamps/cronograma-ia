@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import requests
 import json
 import time
@@ -164,7 +164,12 @@ def main():
 
     if df.empty: return
 
-    hoje = datetime.now().date()
+    # --- FILTRAGEM DOS DADOS PARA O DIA E USUÁRIO ---
+    # CORREÇÃO: Ajusta a data para o fuso horário do Brasil (UTC-3) para garantir que o dia correto seja exibido.
+    # Servidores de nuvem (como o do Streamlit Cloud) geralmente operam em UTC. 
+    # datetime.now() pegaria o dia seguinte após as 21h do Brasil.
+    hoje = (datetime.now(timezone.utc) - timedelta(hours=3)).date()
+    
     df_hoje = df[df['Data'].dt.date == hoje]
     df_usuario_hoje = df_hoje[(df_hoje['Aluno(a)'] == user) | (df_hoje['Aluno(a)'] == 'Ambos')]
 
