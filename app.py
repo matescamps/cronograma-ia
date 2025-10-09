@@ -525,3 +525,126 @@ with col2:
 
 st.markdown("---")
 st.caption("Desenvolvido para cronograma de Medicina — Streamlit + Google Sheets + IA. Use com cuidado, teste em cópia da planilha.")
+import streamlit as st
+import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
+
+# -------------------------
+# CONFIGURAÇÕES DO SECRETS
+# -------------------------
+SPREADSHEET_ID_OR_URL = st.secrets["SPREADSHEET_ID_OR_URL"]
+SHEET_TAB_NAME = st.secrets["SHEET_TAB_NAME"]
+GCP_SERVICE_ACCOUNT = st.secrets["gcp_service_account"]
+
+# -------------------------
+# FUNÇÃO PARA CONECTAR PLANILHA
+# -------------------------
+@st.cache_data(ttl=600)
+def load_sheet_df():
+    creds = Credentials.from_service_account_info(GCP_SERVICE_ACCOUNT)
+    client = gspread.authorize(creds)
+    sheet = client.open_by_url(SPREADSHEET_ID_OR_URL).worksheet(SHEET_TAB_NAME)
+    data = sheet.get_all_records()
+    df = pd.DataFrame(data)
+    return df, sheet
+
+# -------------------------
+# LOGIN INICIAL
+# -------------------------
+if "user" not in st.session_state:
+    st.session_state["user"] = None
+
+if st.session_state["user"] is None:
+    st.title("Quem está usando o app?")
+    user = st.selectbox("Selecione seu nome", ["Mateus", "Ana"])
+    if st.button("Entrar"):
+        st.session_state["user"] = user
+        st.experimental_rerun()
+
+# -------------------------
+# CARREGANDO PLANILHA
+# -------------------------
+if st.session_state["user"]:
+    st.title(f"Olá, {st.session_state['user']}! Aqui está seu resumo diário:")
+    try:
+        df, sheet = load_sheet_df()
+        st.success("Planilha carregada com sucesso!")
+        # Mostrando primeiras linhas como exemplo
+        st.dataframe(df.head())
+    except Exception as e:
+        st.error(f"Erro ao abrir planilha: {e}")
+import datetime
+
+# -------------------------
+# FUNÇÃO PARA CALCULAR % CONCLUÍDO
+# -------------------------
+def calc_percentage(teoria, quest_planejadas, quest_feitas):
+    if teoria:
+        base = quest_planejadas + 1
+        concluido = 1 + quest_feitas
+        perc = min(concluido / base * 100, 100)
+    else:
+        base = quest_planejadas + 1
+        perc = min(quest_feitas / base * 100, 100)
+    return perc
+
+# -------------------------
+# FUNÇÃO PARA EXIBIR PERÍODO EM CARD
+# -------------------------
+def display_period(df, row_idx, period):
+    materia = df.loc[row_idx, f"Matéria ({period})"]
+    atividade = df.loc[row_idx, f"Atividade Detalhada ({period})"]
+    teoria_feita = df.loc[row_idx, f"Teoria Feita ({period})"]
+    quest_planejadas = df.loc[row_idx, f"Questões Planejadas ({period})"]
+    quest_feitas = df.loc[row_idx, f"Questões Feitas ({period})"]
+
+    st.subheader(f"{period} - {materia}")
+    st.write(atividade)
+
+    # Checkbox teoria
+    teoria = st.checkbox("Teoria feita?", value=teoria_feita, key=f"{row_idx}_{period}_teoria")
+
+    # Número de questões feitas
+    quest = st.number_input(
+        "Questões feitas",
+        min_value=0,
+        max_value=quest_planejadas,
+        value=quest_feitas,
+        step=1,
+        key=f"{row_idx}_{period}_quest"
+    )
+
+    # % concluído
+    perc = calc_percentage(teoria, quest_planejadas, quest)
+    st.progress(int(perc))
+
+    return teoria, quest, perc
+
+# -------------------------
+# DASHBOARD DIÁRIO
+# -------------------------
+today = datetime.date.today()
+row_today = df[df['Data'] == today.strftime("%d/%m/%Y")]
+
+if row_today.empty:
+    st.info("Nenhuma tarefa planejada para hoje.")
+else:
+    row_idx = row_today.index[0]
+
+    st.header(f"Tarefas de {today.strftime('%d/%m/%Y')}")
+    periods = ["Manhã", "Tarde", "Noite"]
+
+    updated_values = {}
+
+    for period in periods:
+        teoria, quest, perc = display_period(df, row_idx, period)
+        updated_values[f"Teoria Feita ({period})"] = teoria
+        updated_values[f"Questões Feitas ({period})"] = quest
+        updated_values[f"% Concluído ({period})"] = perc
+
+    # Botão para salvar alterações
+    if st.button("Salvar alterações"):
+        for col, val in updated_values.items():
+            sheet.update_cell(row_idx + 2, df.columns.get_loc(col) + 1, val)
+        st.success("Alterações salvas na planilha!")
