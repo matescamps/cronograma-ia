@@ -20,7 +20,21 @@ st.set_page_config(layout="wide", page_title="Cronograma Inteligente")
 def connect_to_google_sheets():
     try:
         scopes = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds_dict = st.secrets["gcp_service_account"]
+        creds_info = st.secrets["gcp_service_account"]
+
+        # --- CORREÇÃO ADICIONADA ---
+        # Verifica se as credenciais foram coladas como uma string JSON no secrets.toml.
+        # Se sim, converte para um dicionário para evitar o erro "'str' object has no attribute 'keys'".
+        if isinstance(creds_info, str):
+            try:
+                creds_dict = json.loads(creds_info)
+            except json.JSONDecodeError:
+                st.error("Erro Crítico: O formato das suas credenciais 'gcp_service_account' em secrets.toml parece ser uma string JSON inválida. Por favor, verifique se copiou o conteúdo do arquivo .json corretamente.")
+                return None
+        else:
+            creds_dict = creds_info
+        # --- FIM DA CORREÇÃO ---
+
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
         return client
