@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Cronograma Ana&Mateus — Versão corrigida
-Correções:
- - remove atribuição indevida client.session (evita '_auth_request' error)
- - usa argumentos nomeados em worksheet.update(...) para evitar DeprecationWarning
- - load_data recebe _client para evitar UnhashableParamError
-Mantém recursos: IA fallback, fallback local, normalização % Concluído, Pomodoro, Anki export, smart rescheduler.
+Cronograma Ana&Mateus — Versão finalizada (corrige experimental_rerun + diagnóstico de service account)
+Instruções:
+ - Rode: streamlit run cronograma_anamateus.py
+ - Mantenha suas credenciais em .streamlit/secrets.toml (SPREADSHEET_ID_OR_URL, SHEET_TAB_NAME, gcp_service_account, GROQ_API_KEY, etc.)
+ - Não exponha keys publicamente.
 """
 import streamlit as st
 import pandas as pd
@@ -23,13 +22,26 @@ st.set_page_config(page_title="Cronograma Ana&Mateus", page_icon="🎓", layout=
 st.title("Cronograma Ana&Mateus — IA & Criatividade")
 
 # ----------------------------
-# Utils: limpar strings numéricas problemáticas
+# Helper: forçar rerun sem experimental_rerun
+# ----------------------------
+def safe_rerun():
+    """
+    Força reload do app sem usar st.experimental_rerun (p/ compatibilidade).
+    Atualiza query params causando rerun.
+    """
+    try:
+        st.experimental_set_query_params(_refresh=int(time.time()))
+    except Exception:
+        # fallback extremamente simples: atualizar um valor de session_state
+        st.session_state['_forced_reload'] = st.session_state.get('_forced_reload', 0) + 1
+
+# ----------------------------
+# Utils: limpar strings numéricas "sujas"
 # ----------------------------
 def clean_number_like_series(s: pd.Series) -> pd.Series:
     s = s.fillna("").astype(str)
-    s = s.str.replace(r'[\[\]\'"]', '', regex=True)   # remove colchetes/aspas
+    s = s.str.replace(r'[\[\]\'"]', '', regex=True)
     s = s.str.strip()
-    # remover pontos de milhar quando houver formato BR (ex: '1.234,56')
     has_thousand = s.str.contains(r'\.\d{3}', regex=True)
     if has_thousand.any():
         s = s.where(~has_thousand, s.str.replace('.', '', regex=False))
@@ -38,7 +50,7 @@ def clean_number_like_series(s: pd.Series) -> pd.Series:
     return pd.to_numeric(s, errors='coerce').fillna(0.0)
 
 # ----------------------------
-# Conexão Google Sheets (robusta)
+# Conexão ao Google Sheets (robusta)
 # ----------------------------
 @st.cache_resource(ttl=600, show_spinner=False)
 def connect_to_google_sheets():
@@ -47,35 +59,30 @@ def connect_to_google_sheets():
         creds_info = st.secrets.get("gcp_service_account", None)
         if not creds_info:
             st.error("❌ gcp_service_account ausente em st.secrets.")
-            return None
+            return None, None
         if isinstance(creds_info, str):
             try:
                 creds_dict = json.loads(creds_info)
             except json.JSONDecodeError:
-                # tenta substituir barras invertidas duplas por nova linha
                 creds_dict = json.loads(creds_info.replace('\\\\n', '\n'))
         else:
             creds_dict = dict(creds_info)
 
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-
-        # NÃO sobrescrever client.session (causa '_auth_request' error em algumas versões)
         client = gspread.Client(auth=creds)
-        # cliente configurado; não tocar session
-        return client
+        # NÃO sobrescrever client.session (evita erro '_auth_request')
+        # Retornar também o client_email pra exibir diagnóstico na UI
+        client_email = creds_dict.get("client_email", None)
+        return client, client_email
     except Exception as e:
         st.error(f"Erro ao conectar ao Google Sheets: {str(e)[:300]}")
-        return None
+        return None, None
 
 # ----------------------------
-# Carregar e normalizar dados (ATENÇÃO: parâmetro _client para evitar erro de hash)
+# load_data com _client (evita UnhashableParamError)
 # ----------------------------
 @st.cache_data(ttl=60, show_spinner=False)
 def load_data(_client, spreadsheet_id: str, sheet_tab_name: str) -> Tuple[pd.DataFrame, Optional[Any], List[str]]:
-    """
-    _client : gspread.Client (underscore evita tentativa de hash pelo Streamlit)
-    Retorna: (df, worksheet, headers)
-    """
     try:
         if not _client:
             return pd.DataFrame(), None, []
@@ -91,7 +98,7 @@ def load_data(_client, spreadsheet_id: str, sheet_tab_name: str) -> Tuple[pd.Dat
         data = all_values[1:] if len(all_values) > 1 else []
         df = pd.DataFrame(data, columns=headers)
 
-        # garantir colunas esperadas
+        # garantir colunas
         expected = [
             "Data","Dificuldade (1-5)","Status","Aluno(a)","Dia da Semana","Fase do Plano",
             "Matéria (Manhã)","Atividade Detalhada (Manhã)","Teoria Feita (Manhã)","Questões Planejadas (Manhã)",
@@ -104,21 +111,18 @@ def load_data(_client, spreadsheet_id: str, sheet_tab_name: str) -> Tuple[pd.Dat
             if c not in df.columns:
                 df[c] = ""
 
-        # Conversões e normalizações robustas
+        # conversões
         df['Data'] = pd.to_datetime(df['Data'], format='%d/%m/%Y', errors='coerce')
         df['Dificuldade (1-5)'] = pd.to_numeric(df['Dificuldade (1-5)'], errors='coerce').fillna(0).astype(int)
 
-        # Questões -> int
         for col in df.columns:
             if 'Questões' in col:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
 
-        # Teoria Feita -> boolean
         for col in df.columns:
             if 'Teoria Feita' in col:
                 df[col] = df[col].astype(str).str.upper().isin(['TRUE','VERDADEIRO','1','SIM'])
 
-        # % Concluído -> float 0..1 (usa clean_number_like_series para evitar FutureWarning)
         for col in df.columns:
             if '% Concluído' in col or '%Concluído' in col:
                 s_raw = df[col].astype(str)
@@ -135,7 +139,7 @@ def load_data(_client, spreadsheet_id: str, sheet_tab_name: str) -> Tuple[pd.Dat
         return pd.DataFrame(), None, []
 
 # ----------------------------
-# Groq API wrapper com fallback automático de modelo
+# Groq wrapper com fallback de modelo
 # ----------------------------
 def call_groq_api_with_model(prompt: str, model: str, max_retries: int = 2) -> Tuple[bool, str, Optional[str]]:
     groq_key = st.secrets.get('GROQ_API_KEY', None)
@@ -169,7 +173,6 @@ def call_groq_api_with_model(prompt: str, model: str, max_retries: int = 2) -> T
                 return True, json.dumps(j)[:3000], model
             if resp.status_code == 401:
                 return False, "⚠️ API Key inválida (401).", model
-            # analisar erro JSON para model_decommissioned
             try:
                 errj = resp.json()
                 err = errj.get('error') or {}
@@ -203,7 +206,6 @@ def call_groq_api(prompt: str) -> Tuple[bool, str, str]:
     ok, text, used = call_groq_api_with_model(prompt, configured_model)
     if ok:
         return True, text, used
-    # se erro por model_decommissioned, tenta fallback
     if isinstance(text, str) and ('model_decommissioned' in text or 'deprecat' in text.lower() or 'decommission' in text.lower()):
         ok2, text2, used2 = call_groq_api_with_model(prompt, fallback_model)
         if ok2:
@@ -246,7 +248,7 @@ def fallback_quiz(row, period_label: str, n:int=3):
     return text, cards
 
 # ----------------------------
-# Planilha helpers (ID, encontrar linha, atualizar)
+# Planilha helpers (usar args nomeados em update)
 # ----------------------------
 def ensure_id_column(worksheet, headers):
     try:
@@ -254,7 +256,7 @@ def ensure_id_column(worksheet, headers):
             return headers
         first_row = worksheet.row_values(1)
         first_row.append('ID')
-        # usar argumentos nomeados: values primeiro, range depois (evita DeprecationWarning)
+        # usar argumentos nomeados (valores primeiro) para evitar DeprecationWarning
         worksheet.update(values=[first_row], range='1:1')
         all_values = worksheet.get_all_values()
         headers_new = all_values[0]
@@ -341,7 +343,6 @@ def mark_done(worksheet, df_row, headers) -> bool:
                 ci = headers.index(col_name) + 1
                 if try_update_cell(worksheet, row_idx, ci, "100%"):
                     updated = True
-        # Hora Conclusão: criar se necessário usando args nomeados
         if 'Hora Conclusão' not in headers:
             try:
                 first_row = worksheet.row_values(1)
@@ -360,15 +361,7 @@ def mark_done(worksheet, df_row, headers) -> bool:
         return False
 
 # ----------------------------
-# Export Anki
-# ----------------------------
-def anki_csv_download(cards: List[tuple], filename: str):
-    dfc = pd.DataFrame(cards, columns=["Front","Back"])
-    csv = dfc.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Baixar CSV Anki", data=csv, file_name=filename, mime="text/csv")
-
-# ----------------------------
-# Visualizações (Streamlit charts)
+# Analytics (Streamlit charts)
 # ----------------------------
 def show_analytics(df: pd.DataFrame):
     st.subheader("Analytics Rápidos")
@@ -456,23 +449,15 @@ def pomodoro_widget():
     st.components.v1.html(js, height=120)
 
 # ----------------------------
-# IA prompts / fallback (já definidos antes)
+# Anki export
 # ----------------------------
-def build_activity_prompt(row, period_label):
-    subj = row.get(f"Matéria ({period_label})", "")
-    act = row.get(f"Atividade Detalhada ({period_label})", "")
-    diff = int(row.get("Dificuldade (1-5)", 0) or 0)
-    return (f"Você é um coach de estudos experiente. Resuma em 1 parágrafo e entregue 3 passos práticos."
-            f" Matéria: {subj}. Atividade: {act}. Dificuldade: {diff}. Responda em português.")
-
-def generate_quiz_prompt(row, period_label, n=4):
-    subj = row.get(f"Matéria ({period_label})", "")
-    desc = row.get(f"Atividade Detalhada ({period_label})", "")
-    return (f"Crie um mini-quiz de {n} questões sobre '{subj}' com foco em {desc}. "
-            "Forneça enunciado, 4 alternativas A-D e, no final, 'Gabarito: A,B,...'. Responda em português.")
+def anki_csv_download(cards: List[tuple], filename: str):
+    dfc = pd.DataFrame(cards, columns=["Front","Back"])
+    csv = dfc.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Baixar CSV Anki", data=csv, file_name=filename, mime="text/csv")
 
 # ----------------------------
-# Auxiliares: XP / spaced repetition / rescheduler
+# Auxiliares (XP, spaced repetition, rescheduler)
 # ----------------------------
 def compute_xp(df: pd.DataFrame, aluno: str) -> Tuple[int,int]:
     xp = 0
@@ -560,57 +545,106 @@ def smart_reschedule(df: pd.DataFrame, worksheet, headers, aluno: str, pct_thres
     return report
 
 # ----------------------------
-# UI principal
+# Prompts IA
+# ----------------------------
+def build_activity_prompt(row, period_label):
+    subj = row.get(f"Matéria ({period_label})", "")
+    act = row.get(f"Atividade Detalhada ({period_label})", "")
+    diff = int(row.get("Dificuldade (1-5)", 0) or 0)
+    return (f"Você é um coach de estudos experiente. Resuma em 1 parágrafo e entregue 3 passos práticos."
+            f" Matéria: {subj}. Atividade: {act}. Dificuldade: {diff}. Responda em português.")
+
+def generate_quiz_prompt(row, period_label, n=4):
+    subj = row.get(f"Matéria ({period_label})", "")
+    desc = row.get(f"Atividade Detalhada ({period_label})", "")
+    return (f"Crie um mini-quiz de {n} questões sobre '{subj}' com foco em {desc}. "
+            "Forneça enunciado, 4 alternativas A-D e, no final, 'Gabarito: A,B,...'. Responda em português.")
+
+# ----------------------------
+# UI: login e main
 # ----------------------------
 def show_login():
+    st.markdown("### Entrar")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("👨‍🎓 Entrar como Mateus"):
+        if st.button("👨‍🎓 Mateus"):
             st.session_state.logged_user = "Mateus"
-            st.experimental_rerun()
+            safe_rerun()
     with col2:
-        if st.button("👩‍🎓 Entrar como Ana"):
+        if st.button("👩‍🎓 Ana"):
             st.session_state.logged_user = "Ana"
-            st.experimental_rerun()
+            safe_rerun()
 
 def main():
+    # preparar session
     if 'logged_user' not in st.session_state:
         st.session_state.logged_user = None
-    st.sidebar.title("Cronograma Ana&Mateus")
-    st.sidebar.write("Compartilhe a planilha com o client_email do service account como Editor.")
-    client = connect_to_google_sheets()
+
+    # Conectar e obter client_email pra exibir na UI
+    client, client_email = connect_to_google_sheets()
+
+    # Sidebar diagnóstico + instruções
+    st.sidebar.title("Diagnóstico & Config")
+    st.sidebar.markdown("**Compartilhe a planilha com o email do service account (Editor)**")
+    displayed_email = None
+    # tentar ler client_email de st.secrets se não obtivemos via connection
+    if not client_email:
+        try:
+            creds_info = st.secrets.get("gcp_service_account", "")
+            if isinstance(creds_info, str) and creds_info.strip():
+                creds_dict = json.loads(creds_info.replace('\\\\n', '\n'))
+                displayed_email = creds_dict.get('client_email')
+            elif isinstance(creds_info, dict):
+                displayed_email = creds_info.get('client_email')
+        except Exception:
+            displayed_email = None
+    else:
+        displayed_email = client_email
+
+    if displayed_email:
+        st.sidebar.success(f"Service account (verificado):\n`{displayed_email}`")
+    else:
+        st.sidebar.info("Service account email não encontrado nos secrets. Verifique st.secrets['gcp_service_account'].")
+
+    st.sidebar.markdown("---")
+    st.sidebar.write("Obs: se aparecer erro de permissão, confirme que o e-mail acima foi adicionado como Editor na planilha.")
+
+    # Se não conectou ao Google Sheets, exibir e parar
     if not client:
-        st.stop()
+        st.error("Não foi possível conectar ao Google Sheets. Verifique suas credenciais em .streamlit/secrets.toml.")
+        return
+
     spreadsheet_id = st.secrets.get("SPREADSHEET_ID_OR_URL", "")
     sheet_tab_name = st.secrets.get("SHEET_TAB_NAME", "Cronograma")
 
-    # chamar load_data passando client (a função aceita _client)
+    # carregar dados (passando client para parâmetro _client)
     df, worksheet, headers = load_data(client, spreadsheet_id, sheet_tab_name)
-    if df.empty:
-        st.warning("Planilha vazia ou sem dados válidos.")
+    if df is None or df.empty:
+        st.warning("Planilha vazia ou sem dados válidos (ou erro ao ler). Verifique ID/Aba/permissões.")
+        # Ainda assim permitir login e mostrar instruções
+        if not st.session_state.logged_user:
+            show_login()
         return
 
-    # garantir ID
+    # garantir ID (usa worksheet.update com args nomeados internamente)
     headers = ensure_id_column(worksheet, headers)
 
-    user = st.session_state.get('logged_user', None)
-    if not user:
+    # se não logado, mostrar login
+    if not st.session_state.logged_user:
         show_login()
         return
 
+    user = st.session_state.logged_user
     st.header(f"Cronograma — {user}")
 
     ia_enabled = st.sidebar.checkbox("Ativar IA (Groq)", value=True if st.secrets.get('GROQ_API_KEY') else False)
     threshold = st.sidebar.slider("Threshold para re-agendamento (%)", 0, 100, 50) / 100.0
-    st.sidebar.markdown("---")
-    st.sidebar.write("Se a IA estiver indisponível o app gera fallback local (resumo + quiz).")
 
     today = (datetime.now(timezone.utc) - timedelta(hours=3)).date()
     df_valid = df[df['Data'].notna()]
     df_today = df_valid[df_valid['Data'].dt.date == today]
     df_user_today = df_today[(df_today['Aluno(a)'] == user) | (df_today['Aluno(a)'] == 'Ambos')]
 
-    # Quick XP & streak
     xp, streak = compute_xp(df, user)
     colx1, colx2 = st.columns(2)
     colx1.metric("XP acumulado", xp)
@@ -693,7 +727,7 @@ def main():
                         load_data.clear()
                     except Exception:
                         pass
-                    st.experimental_rerun()
+                    safe_rerun()
                 else:
                     st.warning("Não foi possível marcar concluído (verifique permissões).")
             if st.button("📤 Reagendar Inteligente", key=f"resch_{idx}"):
