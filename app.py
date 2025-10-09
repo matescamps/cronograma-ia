@@ -55,18 +55,21 @@ def load_data(_client, spreadsheet_id, sheet_tab_name):
             if 'Teoria Feita' in col:
                 df[col] = df[col].apply(lambda x: True if str(x).upper() == 'TRUE' else False)
             
-            # --- CORREÇÃO ADICIONADA AQUI ---
-            # Normaliza as colunas de porcentagem para o intervalo [0.0, 1.0]
+            # --- CORREÇÃO APLICADA AQUI ---
+            # Normaliza as colunas de porcentagem para o intervalo [0.0, 1.0] e garante o tipo float
             if '% Concluído' in col:
-                # Converte para string, remove '%' e troca vírgula por ponto para garantir a conversão.
+                # Limpa e converte para número
                 df[col] = df[col].astype(str).str.replace('%', '', regex=False).str.replace(',', '.', regex=False)
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 
-                # Se os valores forem maiores que 1 (ex: 100 para 100%), normaliza para a escala 0-1.
-                # A função st.progress() requer valores float entre 0.0 e 1.0.
+                # Normaliza se o valor estiver em escala de 100 (ex: 75 -> 0.75)
                 df.loc[df[col] > 1, col] = df.loc[df[col] > 1, col] / 100.0
+                
                 # Garante que o valor não ultrapasse 1.0
-                df.loc[df[col] > 1, col] = 1.0
+                df[col] = df[col].clip(0, 1)
+
+                # Garante que o tipo final seja float, resolvendo o erro 'int64'
+                df[col] = df[col].astype(float)
 
 
         return df, worksheet
