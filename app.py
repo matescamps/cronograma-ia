@@ -1,14 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Cronograma Ana&Mateus — Versão corrigida (load_data aceita _client para evitar UnhashableParamError)
-Funcionalidades:
- - Conexão robusta com Google Sheets
- - Normalização segura de colunas (corrige FutureWarning)
- - Fallback automático de modelo Groq se o modelo estiver descomissionado
- - Fallback local (resumos e quizzes) quando IA indisponível
- - ID por linha, Hora Conclusão ao marcar concluído
- - Smart rescheduler, export Anki, Focus Mode (Pomodoro cliente-side)
- - Não depende de matplotlib (usa st.bar_chart / st.line_chart)
+Cronograma Ana&Mateus — Versão corrigida
+Correções:
+ - remove atribuição indevida client.session (evita '_auth_request' error)
+ - usa argumentos nomeados em worksheet.update(...) para evitar DeprecationWarning
+ - load_data recebe _client para evitar UnhashableParamError
+Mantém recursos: IA fallback, fallback local, normalização % Concluído, Pomodoro, Anki export, smart rescheduler.
 """
 import streamlit as st
 import pandas as pd
@@ -35,13 +32,13 @@ def clean_number_like_series(s: pd.Series) -> pd.Series:
     # remover pontos de milhar quando houver formato BR (ex: '1.234,56')
     has_thousand = s.str.contains(r'\.\d{3}', regex=True)
     if has_thousand.any():
-        s = s.where(~has_thousand, s.str.replace('.','', regex=False))
+        s = s.where(~has_thousand, s.str.replace('.', '', regex=False))
     s = s.str.replace(',', '.', regex=False)
     s = s.str.replace(r'[^\d\.\-]', '', regex=True)
     return pd.to_numeric(s, errors='coerce').fillna(0.0)
 
 # ----------------------------
-# Conexão Google Sheets
+# Conexão Google Sheets (robusta)
 # ----------------------------
 @st.cache_resource(ttl=600, show_spinner=False)
 def connect_to_google_sheets():
@@ -55,12 +52,16 @@ def connect_to_google_sheets():
             try:
                 creds_dict = json.loads(creds_info)
             except json.JSONDecodeError:
-                creds_dict = json.loads(creds_info.replace('\\\\n', '\\n'))
+                # tenta substituir barras invertidas duplas por nova linha
+                creds_dict = json.loads(creds_info.replace('\\\\n', '\n'))
         else:
             creds_dict = dict(creds_info)
+
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+
+        # NÃO sobrescrever client.session (causa '_auth_request' error em algumas versões)
         client = gspread.Client(auth=creds)
-        client.session = gspread.http_client.HTTPClient(auth=creds)
+        # cliente configurado; não tocar session
         return client
     except Exception as e:
         st.error(f"Erro ao conectar ao Google Sheets: {str(e)[:300]}")
@@ -72,13 +73,12 @@ def connect_to_google_sheets():
 @st.cache_data(ttl=60, show_spinner=False)
 def load_data(_client, spreadsheet_id: str, sheet_tab_name: str) -> Tuple[pd.DataFrame, Optional[Any], List[str]]:
     """
-    _client : gspread.Client (o underscore evita tentativa de hash pelo Streamlit)
+    _client : gspread.Client (underscore evita tentativa de hash pelo Streamlit)
     Retorna: (df, worksheet, headers)
     """
     try:
         if not _client:
             return pd.DataFrame(), None, []
-        # abrir por key ou url
         try:
             spreadsheet = _client.open_by_key(spreadsheet_id)
         except Exception:
@@ -91,7 +91,7 @@ def load_data(_client, spreadsheet_id: str, sheet_tab_name: str) -> Tuple[pd.Dat
         data = all_values[1:] if len(all_values) > 1 else []
         df = pd.DataFrame(data, columns=headers)
 
-        # garantir colunas esperadas (adiciona vazias se não existirem)
+        # garantir colunas esperadas
         expected = [
             "Data","Dificuldade (1-5)","Status","Aluno(a)","Dia da Semana","Fase do Plano",
             "Matéria (Manhã)","Atividade Detalhada (Manhã)","Teoria Feita (Manhã)","Questões Planejadas (Manhã)",
@@ -197,7 +197,7 @@ def call_groq_api_with_model(prompt: str, model: str, max_retries: int = 2) -> T
 def call_groq_api(prompt: str) -> Tuple[bool, str, str]:
     configured_model = st.secrets.get('GROQ_MODEL', "").strip()
     if not configured_model:
-        configured_model = "gemma2-9b-it"  # legacy default — será detectado e trocado se decommissioned
+        configured_model = "gemma2-9b-it"
     fallback_model = st.secrets.get('GROQ_FALLBACK_MODEL', "llama-3.1-8b-instant")
 
     ok, text, used = call_groq_api_with_model(prompt, configured_model)
@@ -246,7 +246,7 @@ def fallback_quiz(row, period_label: str, n:int=3):
     return text, cards
 
 # ----------------------------
-# Planilha helpers (ID, find, update)
+# Planilha helpers (ID, encontrar linha, atualizar)
 # ----------------------------
 def ensure_id_column(worksheet, headers):
     try:
@@ -254,7 +254,8 @@ def ensure_id_column(worksheet, headers):
             return headers
         first_row = worksheet.row_values(1)
         first_row.append('ID')
-        worksheet.update('1:1', [first_row])
+        # usar argumentos nomeados: values primeiro, range depois (evita DeprecationWarning)
+        worksheet.update(values=[first_row], range='1:1')
         all_values = worksheet.get_all_values()
         headers_new = all_values[0]
         id_idx = headers_new.index('ID')
@@ -269,7 +270,7 @@ def ensure_id_column(worksheet, headers):
         all_values = worksheet.get_all_values()
         return all_values[0]
     except Exception as e:
-        st.warning(f"Erro ao garantir ID: {str(e)[:120]}")
+        st.warning(f"Erro ao garantir ID: {str(e)[:160]}")
         return headers
 
 def find_row_index(worksheet, date_val: datetime, aluno: str, activity_hint: str) -> Optional[int]:
@@ -312,7 +313,7 @@ def find_row_index(worksheet, date_val: datetime, aluno: str, activity_hint: str
                 return i
         return None
     except Exception as e:
-        st.warning(f"Erro find_row_index: {str(e)[:120]}")
+        st.warning(f"Erro find_row_index: {str(e)[:160]}")
         return None
 
 def try_update_cell(worksheet, r:int, c:int, value) -> bool:
@@ -340,12 +341,12 @@ def mark_done(worksheet, df_row, headers) -> bool:
                 ci = headers.index(col_name) + 1
                 if try_update_cell(worksheet, row_idx, ci, "100%"):
                     updated = True
-        # Hora Conclusão
+        # Hora Conclusão: criar se necessário usando args nomeados
         if 'Hora Conclusão' not in headers:
             try:
                 first_row = worksheet.row_values(1)
                 first_row.append('Hora Conclusão')
-                worksheet.update('1:1', [first_row])
+                worksheet.update(values=[first_row], range='1:1')
                 headers.append('Hora Conclusão')
             except Exception:
                 pass
@@ -359,7 +360,15 @@ def mark_done(worksheet, df_row, headers) -> bool:
         return False
 
 # ----------------------------
-# Analytics (Streamlit charts)
+# Export Anki
+# ----------------------------
+def anki_csv_download(cards: List[tuple], filename: str):
+    dfc = pd.DataFrame(cards, columns=["Front","Back"])
+    csv = dfc.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Baixar CSV Anki", data=csv, file_name=filename, mime="text/csv")
+
+# ----------------------------
+# Visualizações (Streamlit charts)
 # ----------------------------
 def show_analytics(df: pd.DataFrame):
     st.subheader("Analytics Rápidos")
@@ -447,163 +456,20 @@ def pomodoro_widget():
     st.components.v1.html(js, height=120)
 
 # ----------------------------
-# Quiz -> Anki export
+# IA prompts / fallback (já definidos antes)
 # ----------------------------
-def anki_csv_download(cards: List[tuple], filename: str):
-    dfc = pd.DataFrame(cards, columns=["Front","Back"])
-    csv = dfc.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Baixar CSV Anki", data=csv, file_name=filename, mime="text/csv")
+def build_activity_prompt(row, period_label):
+    subj = row.get(f"Matéria ({period_label})", "")
+    act = row.get(f"Atividade Detalhada ({period_label})", "")
+    diff = int(row.get("Dificuldade (1-5)", 0) or 0)
+    return (f"Você é um coach de estudos experiente. Resuma em 1 parágrafo e entregue 3 passos práticos."
+            f" Matéria: {subj}. Atividade: {act}. Dificuldade: {diff}. Responda em português.")
 
-# ----------------------------
-# UI principal
-# ----------------------------
-def show_login():
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("👨‍🎓 Entrar como Mateus"):
-            st.session_state.logged_user = "Mateus"
-            st.experimental_rerun()
-    with col2:
-        if st.button("👩‍🎓 Entrar como Ana"):
-            st.session_state.logged_user = "Ana"
-            st.experimental_rerun()
-
-def main():
-    if 'logged_user' not in st.session_state:
-        st.session_state.logged_user = None
-    st.sidebar.title("Cronograma Ana&Mateus")
-    st.sidebar.write("Compartilhe a planilha com o client_email do service account como Editor.")
-    client = connect_to_google_sheets()
-    if not client:
-        st.stop()
-    spreadsheet_id = st.secrets.get("SPREADSHEET_ID_OR_URL", "")
-    sheet_tab_name = st.secrets.get("SHEET_TAB_NAME", "Cronograma")
-
-    # --------- Aqui chamamos load_data passando client, mas a função aceita _client (ok) -----------
-    df, worksheet, headers = load_data(client, spreadsheet_id, sheet_tab_name)
-    if df.empty:
-        st.warning("Planilha vazia ou sem dados válidos.")
-        return
-    headers = ensure_id_column(worksheet, headers)
-
-    user = st.session_state.get('logged_user', None)
-    if not user:
-        show_login()
-        return
-
-    st.header(f"Cronograma — {user}")
-
-    ia_enabled = st.sidebar.checkbox("Ativar IA (Groq)", value=True if st.secrets.get('GROQ_API_KEY') else False)
-    threshold = st.sidebar.slider("Threshold para re-agendamento (%)", 0, 100, 50) / 100.0
-    st.sidebar.markdown("---")
-    st.sidebar.write("Se a IA estiver indisponível o app gera fallback local (resumo + quiz).")
-
-    today = (datetime.now(timezone.utc) - timedelta(hours=3)).date()
-    df_valid = df[df['Data'].notna()]
-    df_today = df_valid[df_valid['Data'].dt.date == today]
-    df_user_today = df_today[(df_today['Aluno(a)'] == user) | (df_today['Aluno(a)'] == 'Ambos')]
-
-    # Quick XP & streak (simplificado)
-    xp, streak = compute_xp(df, user)
-    colx1, colx2 = st.columns(2)
-    colx1.metric("XP acumulado", xp)
-    colx2.metric("Streak (dias)", streak)
-
-    if df_user_today.empty:
-        st.info("Nenhuma tarefa para hoje — você pode gerar um micro-plano IA ou revisar próximos dias.")
-        if st.button("🔮 Gerar micro-plano IA para próximas 7 tarefas"):
-            future = df_valid[(df_valid['Aluno(a)']==user) | (df_valid['Aluno(a)']=='Ambos')].sort_values('Data').head(7)
-            outputs = []
-            for _, r in future.iterrows():
-                if ia_enabled:
-                    ok, out, used = call_groq_api(build_activity_prompt(r, "Manhã"))
-                    if ok:
-                        outputs.append(f"{r['Data'].strftime('%d/%m/%Y')}: {out}")
-                    else:
-                        outputs.append(f"{r['Data'].strftime('%d/%m/%Y')}: (IA indisponível) {fallback_summary(r,'Manhã')}")
-                else:
-                    outputs.append(f"{r['Data'].strftime('%d/%m/%Y')}: {fallback_summary(r,'Manhã')}")
-            st.write("\n\n".join(outputs))
-        calendar_progress_chart(df, user)
-        return
-
-    for idx, row in df_user_today.iterrows():
-        st.markdown("---")
-        title = row.get("Matéria (Manhã)") or row.get("Matéria (Tarde)") or row.get("Matéria (Noite)") or "Atividade"
-        st.subheader(f"{title} — {row['Data'].strftime('%d/%m/%Y') if not pd.isna(row['Data']) else 'Sem data'}")
-        c1, c2, c3 = st.columns([4,2,2])
-
-        with c1:
-            st.write("Manhã:", row.get("Atividade Detalhada (Manhã)") or "—")
-            st.write("Tarde:", row.get("Atividade Detalhada (Tarde)") or "—")
-            st.write("Noite:", row.get("Atividade Detalhada (Noite)") or "—")
-            st.write("Sugestão de revisão:", ", ".join(recommend_spaced_repetition(row)))
-        with c2:
-            for p in ["Manhã","Tarde","Noite"]:
-                col = f"% Concluído ({p})"
-                val = 0.0
-                if col in row.index:
-                    try:
-                        val = float(row[col] or 0.0)
-                    except Exception:
-                        val = 0.0
-                st.metric(p, f"{int(val*100)}%")
-        with c3:
-            period = st.selectbox("Período", ["Manhã","Tarde","Noite"], key=f"period_{idx}")
-            if st.button("💡 Coach IA (Resumo)", key=f"coach_{idx}"):
-                if ia_enabled:
-                    ok, out, used_model = call_groq_api(build_activity_prompt(row, period))
-                    if ok:
-                        st.info(out)
-                        st.caption(f"Modelo usado: {used_model}")
-                    else:
-                        st.warning("Coach IA indisponível: " + out)
-                        st.info(fallback_summary(row, period))
-                else:
-                    st.info(fallback_summary(row, period))
-            if st.button("❓ Gerar Quiz + Anki", key=f"quiz_{idx}"):
-                if ia_enabled:
-                    ok, out, used_model = call_groq_api(generate_quiz_prompt(row, period, 4))
-                    if ok:
-                        st.code(out)
-                        st.caption(f"Modelo usado: {used_model}")
-                        b = out.encode('utf-8')
-                        st.download_button("📥 Baixar Quiz (txt)", data=b, file_name=f"quiz_{user}_{row['Data'].strftime('%Y%m%d')}.txt", mime="text/plain")
-                    else:
-                        st.warning("IA indisponível — gerando fallback local.")
-                        txt, cards = fallback_quiz(row, period, 3)
-                        st.code(txt)
-                        anki_csv_download(cards, f"anki_{user}_{row['Data'].strftime('%Y%m%d')}.csv")
-                else:
-                    txt, cards = fallback_quiz(row, period, 3)
-                    st.code(txt)
-                    anki_csv_download(cards, f"anki_{user}_{row['Data'].strftime('%Y%m%d')}.csv")
-            if st.button("✅ Marcar Concluído (100%)", key=f"done_{idx}"):
-                ok = mark_done(worksheet, row, headers)
-                if ok:
-                    st.success("Marcado concluído e Hora Conclusão registrada.")
-                    # limpar cache do loader (opcional)
-                    try:
-                        load_data.clear()
-                    except Exception:
-                        pass
-                    st.experimental_rerun()
-                else:
-                    st.warning("Não foi possível marcar concluído (verifique permissões).")
-            if st.button("📤 Reagendar Inteligente", key=f"resch_{idx}"):
-                rpt = smart_reschedule(df, worksheet, headers, user, threshold)
-                st.write(rpt)
-
-    st.markdown("---")
-    pomodoro_widget()
-    st.markdown("---")
-    show_analytics(df)
-    calendar_progress_chart(df, user)
-
-    st.markdown("---")
-    if st.button("📥 Exportar CSV completo"):
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button("Download CSV", data=csv, file_name=f"cronograma_all_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
+def generate_quiz_prompt(row, period_label, n=4):
+    subj = row.get(f"Matéria ({period_label})", "")
+    desc = row.get(f"Atividade Detalhada ({period_label})", "")
+    return (f"Crie um mini-quiz de {n} questões sobre '{subj}' com foco em {desc}. "
+            "Forneça enunciado, 4 alternativas A-D e, no final, 'Gabarito: A,B,...'. Responda em português.")
 
 # ----------------------------
 # Auxiliares: XP / spaced repetition / rescheduler
@@ -694,20 +560,156 @@ def smart_reschedule(df: pd.DataFrame, worksheet, headers, aluno: str, pct_thres
     return report
 
 # ----------------------------
-# Prompts IA
+# UI principal
 # ----------------------------
-def build_activity_prompt(row, period_label):
-    subj = row.get(f"Matéria ({period_label})", "")
-    act = row.get(f"Atividade Detalhada ({period_label})", "")
-    diff = int(row.get("Dificuldade (1-5)", 0) or 0)
-    return (f"Você é um coach de estudos experiente. Resuma em 1 parágrafo e entregue 3 passos práticos."
-            f" Matéria: {subj}. Atividade: {act}. Dificuldade: {diff}. Responda em português.")
+def show_login():
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("👨‍🎓 Entrar como Mateus"):
+            st.session_state.logged_user = "Mateus"
+            st.experimental_rerun()
+    with col2:
+        if st.button("👩‍🎓 Entrar como Ana"):
+            st.session_state.logged_user = "Ana"
+            st.experimental_rerun()
 
-def generate_quiz_prompt(row, period_label, n=4):
-    subj = row.get(f"Matéria ({period_label})", "")
-    desc = row.get(f"Atividade Detalhada ({period_label})", "")
-    return (f"Crie um mini-quiz de {n} questões sobre '{subj}' com foco em {desc}. "
-            "Forneça enunciado, 4 alternativas A-D e, no final, 'Gabarito: A,B,...'. Responda em português.")
+def main():
+    if 'logged_user' not in st.session_state:
+        st.session_state.logged_user = None
+    st.sidebar.title("Cronograma Ana&Mateus")
+    st.sidebar.write("Compartilhe a planilha com o client_email do service account como Editor.")
+    client = connect_to_google_sheets()
+    if not client:
+        st.stop()
+    spreadsheet_id = st.secrets.get("SPREADSHEET_ID_OR_URL", "")
+    sheet_tab_name = st.secrets.get("SHEET_TAB_NAME", "Cronograma")
+
+    # chamar load_data passando client (a função aceita _client)
+    df, worksheet, headers = load_data(client, spreadsheet_id, sheet_tab_name)
+    if df.empty:
+        st.warning("Planilha vazia ou sem dados válidos.")
+        return
+
+    # garantir ID
+    headers = ensure_id_column(worksheet, headers)
+
+    user = st.session_state.get('logged_user', None)
+    if not user:
+        show_login()
+        return
+
+    st.header(f"Cronograma — {user}")
+
+    ia_enabled = st.sidebar.checkbox("Ativar IA (Groq)", value=True if st.secrets.get('GROQ_API_KEY') else False)
+    threshold = st.sidebar.slider("Threshold para re-agendamento (%)", 0, 100, 50) / 100.0
+    st.sidebar.markdown("---")
+    st.sidebar.write("Se a IA estiver indisponível o app gera fallback local (resumo + quiz).")
+
+    today = (datetime.now(timezone.utc) - timedelta(hours=3)).date()
+    df_valid = df[df['Data'].notna()]
+    df_today = df_valid[df_valid['Data'].dt.date == today]
+    df_user_today = df_today[(df_today['Aluno(a)'] == user) | (df_today['Aluno(a)'] == 'Ambos')]
+
+    # Quick XP & streak
+    xp, streak = compute_xp(df, user)
+    colx1, colx2 = st.columns(2)
+    colx1.metric("XP acumulado", xp)
+    colx2.metric("Streak (dias)", streak)
+
+    if df_user_today.empty:
+        st.info("Nenhuma tarefa para hoje — você pode gerar um micro-plano IA ou revisar próximos dias.")
+        if st.button("🔮 Gerar micro-plano IA para próximas 7 tarefas"):
+            future = df_valid[(df_valid['Aluno(a)']==user) | (df_valid['Aluno(a)']=='Ambos')].sort_values('Data').head(7)
+            outputs = []
+            for _, r in future.iterrows():
+                if ia_enabled:
+                    ok, out, used = call_groq_api(build_activity_prompt(r, "Manhã"))
+                    if ok:
+                        outputs.append(f"{r['Data'].strftime('%d/%m/%Y')}: {out}")
+                    else:
+                        outputs.append(f"{r['Data'].strftime('%d/%m/%Y')}: (IA indisponível) {fallback_summary(r,'Manhã')}")
+                else:
+                    outputs.append(f"{r['Data'].strftime('%d/%m/%Y')}: {fallback_summary(r,'Manhã')}")
+            st.write("\n\n".join(outputs))
+        calendar_progress_chart(df, user)
+        return
+
+    for idx, row in df_user_today.iterrows():
+        st.markdown("---")
+        title = row.get("Matéria (Manhã)") or row.get("Matéria (Tarde)") or row.get("Matéria (Noite)") or "Atividade"
+        st.subheader(f"{title} — {row['Data'].strftime('%d/%m/%Y') if not pd.isna(row['Data']) else 'Sem data'}")
+        c1, c2, c3 = st.columns([4,2,2])
+
+        with c1:
+            st.write("Manhã:", row.get("Atividade Detalhada (Manhã)") or "—")
+            st.write("Tarde:", row.get("Atividade Detalhada (Tarde)") or "—")
+            st.write("Noite:", row.get("Atividade Detalhada (Noite)") or "—")
+            st.write("Sugestão de revisão:", ", ".join(recommend_spaced_repetition(row)))
+        with c2:
+            for p in ["Manhã","Tarde","Noite"]:
+                col = f"% Concluído ({p})"
+                val = 0.0
+                if col in row.index:
+                    try:
+                        val = float(row[col] or 0.0)
+                    except Exception:
+                        val = 0.0
+                st.metric(p, f"{int(val*100)}%")
+        with c3:
+            period = st.selectbox("Período", ["Manhã","Tarde","Noite"], key=f"period_{idx}")
+            if st.button("💡 Coach IA (Resumo)", key=f"coach_{idx}"):
+                if ia_enabled:
+                    ok, out, used_model = call_groq_api(build_activity_prompt(row, period))
+                    if ok:
+                        st.info(out)
+                        st.caption(f"Modelo usado: {used_model}")
+                    else:
+                        st.warning("Coach IA indisponível: " + out)
+                        st.info(fallback_summary(row, period))
+                else:
+                    st.info(fallback_summary(row, period))
+            if st.button("❓ Gerar Quiz + Anki", key=f"quiz_{idx}"):
+                if ia_enabled:
+                    ok, out, used_model = call_groq_api(generate_quiz_prompt(row, period, 4))
+                    if ok:
+                        st.code(out)
+                        st.caption(f"Modelo usado: {used_model}")
+                        b = out.encode('utf-8')
+                        st.download_button("📥 Baixar Quiz (txt)", data=b, file_name=f"quiz_{user}_{row['Data'].strftime('%Y%m%d')}.txt", mime="text/plain")
+                    else:
+                        st.warning("IA indisponível — gerando fallback local.")
+                        txt, cards = fallback_quiz(row, period, 3)
+                        st.code(txt)
+                        anki_csv_download(cards, f"anki_{user}_{row['Data'].strftime('%Y%m%d')}.csv")
+                else:
+                    txt, cards = fallback_quiz(row, period, 3)
+                    st.code(txt)
+                    anki_csv_download(cards, f"anki_{user}_{row['Data'].strftime('%Y%m%d')}.csv")
+            if st.button("✅ Marcar Concluído (100%)", key=f"done_{idx}"):
+                ok = mark_done(worksheet, row, headers)
+                if ok:
+                    st.success("Marcado concluído e Hora Conclusão registrada.")
+                    try:
+                        load_data.clear()
+                    except Exception:
+                        pass
+                    st.experimental_rerun()
+                else:
+                    st.warning("Não foi possível marcar concluído (verifique permissões).")
+            if st.button("📤 Reagendar Inteligente", key=f"resch_{idx}"):
+                rpt = smart_reschedule(df, worksheet, headers, user, threshold)
+                st.write(rpt)
+
+    st.markdown("---")
+    pomodoro_widget()
+    st.markdown("---")
+    show_analytics(df)
+    calendar_progress_chart(df, user)
+
+    st.markdown("---")
+    if st.button("📥 Exportar CSV completo"):
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button("Download CSV", data=csv, file_name=f"cronograma_all_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
 
 # ----------------------------
 # Entrypoint
