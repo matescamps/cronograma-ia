@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Cronograma Ana&Mateus — Versão sem matplotlib, resiliente à depreciação de modelos Groq
-- Usa gráficos nativos do Streamlit (st.bar_chart / st.line_chart)
-- Corrige FutureWarning ao normalizar % Concluído
-- Fallback automático de modelo Groq se 'model_decommissioned' for detectado
-- Fallback local (resumo + quiz) se IA indisponível
-- ID por linha, Hora Conclusão, smart rescheduler, export Anki, Pomodoro (cliente-side)
+Cronograma Ana&Mateus — Versão corrigida (load_data aceita _client para evitar UnhashableParamError)
+Funcionalidades:
+ - Conexão robusta com Google Sheets
+ - Normalização segura de colunas (corrige FutureWarning)
+ - Fallback automático de modelo Groq se o modelo estiver descomissionado
+ - Fallback local (resumos e quizzes) quando IA indisponível
+ - ID por linha, Hora Conclusão ao marcar concluído
+ - Smart rescheduler, export Anki, Focus Mode (Pomodoro cliente-side)
+ - Não depende de matplotlib (usa st.bar_chart / st.line_chart)
 """
 import streamlit as st
 import pandas as pd
@@ -29,7 +32,7 @@ def clean_number_like_series(s: pd.Series) -> pd.Series:
     s = s.fillna("").astype(str)
     s = s.str.replace(r'[\[\]\'"]', '', regex=True)   # remove colchetes/aspas
     s = s.str.strip()
-    # remover pontos de milhar quando houver formato BR (p.ex. '1.234,56')
+    # remover pontos de milhar quando houver formato BR (ex: '1.234,56')
     has_thousand = s.str.contains(r'\.\d{3}', regex=True)
     if has_thousand.any():
         s = s.where(~has_thousand, s.str.replace('.','', regex=False))
@@ -64,17 +67,22 @@ def connect_to_google_sheets():
         return None
 
 # ----------------------------
-# Carregar e normalizar dados (evita FutureWarning)
+# Carregar e normalizar dados (ATENÇÃO: parâmetro _client para evitar erro de hash)
 # ----------------------------
 @st.cache_data(ttl=60, show_spinner=False)
-def load_data(client, spreadsheet_id: str, sheet_tab_name: str) -> Tuple[pd.DataFrame, Optional[Any], List[str]]:
+def load_data(_client, spreadsheet_id: str, sheet_tab_name: str) -> Tuple[pd.DataFrame, Optional[Any], List[str]]:
+    """
+    _client : gspread.Client (o underscore evita tentativa de hash pelo Streamlit)
+    Retorna: (df, worksheet, headers)
+    """
     try:
-        if not client:
+        if not _client:
             return pd.DataFrame(), None, []
+        # abrir por key ou url
         try:
-            spreadsheet = client.open_by_key(spreadsheet_id)
+            spreadsheet = _client.open_by_key(spreadsheet_id)
         except Exception:
-            spreadsheet = client.open_by_url(spreadsheet_id)
+            spreadsheet = _client.open_by_url(spreadsheet_id)
         worksheet = spreadsheet.worksheet(sheet_tab_name)
         all_values = worksheet.get_all_values()
         if not all_values:
@@ -83,7 +91,7 @@ def load_data(client, spreadsheet_id: str, sheet_tab_name: str) -> Tuple[pd.Data
         data = all_values[1:] if len(all_values) > 1 else []
         df = pd.DataFrame(data, columns=headers)
 
-        # garantir colunas esperadas
+        # garantir colunas esperadas (adiciona vazias se não existirem)
         expected = [
             "Data","Dificuldade (1-5)","Status","Aluno(a)","Dia da Semana","Fase do Plano",
             "Matéria (Manhã)","Atividade Detalhada (Manhã)","Teoria Feita (Manhã)","Questões Planejadas (Manhã)",
@@ -96,7 +104,7 @@ def load_data(client, spreadsheet_id: str, sheet_tab_name: str) -> Tuple[pd.Data
             if c not in df.columns:
                 df[c] = ""
 
-        # Conversões
+        # Conversões e normalizações robustas
         df['Data'] = pd.to_datetime(df['Data'], format='%d/%m/%Y', errors='coerce')
         df['Dificuldade (1-5)'] = pd.to_numeric(df['Dificuldade (1-5)'], errors='coerce').fillna(0).astype(int)
 
@@ -105,12 +113,12 @@ def load_data(client, spreadsheet_id: str, sheet_tab_name: str) -> Tuple[pd.Data
             if 'Questões' in col:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
 
-        # Teoria Feita -> bool
+        # Teoria Feita -> boolean
         for col in df.columns:
             if 'Teoria Feita' in col:
                 df[col] = df[col].astype(str).str.upper().isin(['TRUE','VERDADEIRO','1','SIM'])
 
-        # % Concluído -> float 0..1 robusto
+        # % Concluído -> float 0..1 (usa clean_number_like_series para evitar FutureWarning)
         for col in df.columns:
             if '% Concluído' in col or '%Concluído' in col:
                 s_raw = df[col].astype(str)
@@ -161,7 +169,7 @@ def call_groq_api_with_model(prompt: str, model: str, max_retries: int = 2) -> T
                 return True, json.dumps(j)[:3000], model
             if resp.status_code == 401:
                 return False, "⚠️ API Key inválida (401).", model
-            # tentar entender erro (model_decommissioned etc)
+            # analisar erro JSON para model_decommissioned
             try:
                 errj = resp.json()
                 err = errj.get('error') or {}
@@ -189,7 +197,7 @@ def call_groq_api_with_model(prompt: str, model: str, max_retries: int = 2) -> T
 def call_groq_api(prompt: str) -> Tuple[bool, str, str]:
     configured_model = st.secrets.get('GROQ_MODEL', "").strip()
     if not configured_model:
-        configured_model = "gemma2-9b-it"  # legacy default; will be caught if decommissioned
+        configured_model = "gemma2-9b-it"  # legacy default — será detectado e trocado se decommissioned
     fallback_model = st.secrets.get('GROQ_FALLBACK_MODEL', "llama-3.1-8b-instant")
 
     ok, text, used = call_groq_api_with_model(prompt, configured_model)
@@ -206,7 +214,7 @@ def call_groq_api(prompt: str) -> Tuple[bool, str, str]:
     return False, text, used
 
 # ----------------------------
-# Fallback local (gerador simples de resumo e quiz)
+# Fallback local (resumo + quiz)
 # ----------------------------
 def fallback_summary(row, period_label: str) -> str:
     subj = row.get(f"Matéria ({period_label})", "") or "a matéria"
@@ -238,7 +246,7 @@ def fallback_quiz(row, period_label: str, n:int=3):
     return text, cards
 
 # ----------------------------
-# Planilha helpers (ID, encontrar linha, atualizar)
+# Planilha helpers (ID, find, update)
 # ----------------------------
 def ensure_id_column(worksheet, headers):
     try:
@@ -351,14 +359,13 @@ def mark_done(worksheet, df_row, headers) -> bool:
         return False
 
 # ----------------------------
-# Analytics (usando Streamlit charts)
+# Analytics (Streamlit charts)
 # ----------------------------
 def show_analytics(df: pd.DataFrame):
     st.subheader("Analytics Rápidos")
     if df.empty:
         st.info("Sem dados para analytics.")
         return
-    # média de conclusão por aluno
     def avg_completion(row):
         vals = []
         for p in ["Manhã","Tarde","Noite"]:
@@ -375,8 +382,6 @@ def show_analytics(df: pd.DataFrame):
     if not agg.empty:
         st.write("Conclusão média por aluno")
         st.bar_chart(agg)
-
-    # média por período
     period_avgs = {}
     for p in ["Manhã","Tarde","Noite"]:
         col = f"% Concluído ({p})"
@@ -396,7 +401,6 @@ def calendar_progress_chart(df: pd.DataFrame, aluno: str):
         st.info("Sem dados para calendar progress.")
         return
     df_a['date'] = df_a['Data'].dt.date
-    # média por dia
     def day_mean(g):
         vals = []
         for p in ["Manhã","Tarde","Noite"]:
@@ -474,6 +478,8 @@ def main():
         st.stop()
     spreadsheet_id = st.secrets.get("SPREADSHEET_ID_OR_URL", "")
     sheet_tab_name = st.secrets.get("SHEET_TAB_NAME", "Cronograma")
+
+    # --------- Aqui chamamos load_data passando client, mas a função aceita _client (ok) -----------
     df, worksheet, headers = load_data(client, spreadsheet_id, sheet_tab_name)
     if df.empty:
         st.warning("Planilha vazia ou sem dados válidos.")
@@ -521,7 +527,6 @@ def main():
         calendar_progress_chart(df, user)
         return
 
-    # Mostrar tarefas de hoje com ações
     for idx, row in df_user_today.iterrows():
         st.markdown("---")
         title = row.get("Matéria (Manhã)") or row.get("Matéria (Tarde)") or row.get("Matéria (Noite)") or "Atividade"
@@ -562,7 +567,6 @@ def main():
                     if ok:
                         st.code(out)
                         st.caption(f"Modelo usado: {used_model}")
-                        # heurística: não parseamos, oferecemos download do texto bruto como txt
                         b = out.encode('utf-8')
                         st.download_button("📥 Baixar Quiz (txt)", data=b, file_name=f"quiz_{user}_{row['Data'].strftime('%Y%m%d')}.txt", mime="text/plain")
                     else:
@@ -578,7 +582,11 @@ def main():
                 ok = mark_done(worksheet, row, headers)
                 if ok:
                     st.success("Marcado concluído e Hora Conclusão registrada.")
-                    load_data.clear()
+                    # limpar cache do loader (opcional)
+                    try:
+                        load_data.clear()
+                    except Exception:
+                        pass
                     st.experimental_rerun()
                 else:
                     st.warning("Não foi possível marcar concluído (verifique permissões).")
@@ -598,7 +606,7 @@ def main():
         st.download_button("Download CSV", data=csv, file_name=f"cronograma_all_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv")
 
 # ----------------------------
-# Funções auxiliares (XP/streak, spaced repetition, rescheduler)
+# Auxiliares: XP / spaced repetition / rescheduler
 # ----------------------------
 def compute_xp(df: pd.DataFrame, aluno: str) -> Tuple[int,int]:
     xp = 0
@@ -609,7 +617,6 @@ def compute_xp(df: pd.DataFrame, aluno: str) -> Tuple[int,int]:
     days = sorted(df_aluno['date_only'].dropna().unique())
     today = (datetime.now(timezone.utc) - timedelta(hours=3)).date()
     streak = 0
-    # find last day <= today
     recent_days = [d for d in days if d <= today]
     last_day = max(recent_days) if recent_days else None
     cur = last_day
