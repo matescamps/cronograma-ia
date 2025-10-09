@@ -26,6 +26,7 @@ export default function ProgressEditor({
   onSaved,
   id,
 }: ProgressEditorProps) {
+  const inputClass = "w-full border border-panel rounded-lg p-2 bg-white text-secondary focus:outline-none focus:ring-2 focus:ring-primary";
   const [planned, setPlanned] = useState<string>(String(defaultPlanned ?? ""));
   const [done, setDone] = useState<string>(String(defaultDone ?? ""));
   const [theoryDone, setTheoryDone] = useState<boolean>(Boolean(defaultTheoryDone));
@@ -67,15 +68,15 @@ export default function ProgressEditor({
   return (
     <section id={id} className="space-y-3">
       <h3 className="font-semibold text-secondary">Progresso</h3>
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
         <LabeledInput label="Questões Planejadas" type="number" value={planned} onChange={setPlanned} min={0} />
         <LabeledInput label="Questões Feitas" type="number" value={done} onChange={setDone} min={0} />
         <Toggle label="Teoria Feita" checked={theoryDone} onChange={setTheoryDone} />
         <LabeledInput label="% Concluído" type="number" value={percent} onChange={setPercent} min={0} max={100} suffix="%" />
-        <div className="col-span-2 md:col-span-1">
+        <div className="col-span-2 md:col-span-2">
           <label className="block text-sm text-muted mb-1">Status</label>
           <select
-            className="w-full border border-panel rounded-lg p-2 bg-white text-secondary focus:outline-none focus:ring-2 focus:ring-primary"
+            className={inputClass}
             value={status}
             onChange={(e) => setStatus(e.target.value)}
           >
@@ -133,14 +134,29 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
       <label className="block text-sm text-muted mb-1">{label}</label>
       <button
         type="button"
-        aria-pressed={checked}
+        role="switch"
+        aria-checked={checked}
         onClick={() => onChange(!checked)}
         className={clsx(
-          "w-full border border-panel rounded-lg p-2",
-          checked ? "bg-success/10 text-secondary" : "bg-white text-muted"
+          "w-full flex items-center justify-between border border-panel rounded-lg px-3 py-2 bg-white",
+          checked ? "text-secondary" : "text-muted"
         )}
       >
-        {checked ? "Sim" : "Não"}
+        <span>{checked ? "Sim" : "Não"}</span>
+        <span
+          aria-hidden
+          className={clsx(
+            "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
+            checked ? "bg-primary" : "bg-panel"
+          )}
+        >
+          <span
+            className={clsx(
+              "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+              checked ? "translate-x-6" : "translate-x-1"
+            )}
+          />
+        </span>
       </button>
     </div>
   );
