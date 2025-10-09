@@ -40,15 +40,25 @@ export default function FocusOS() {
         setLoading(true);
         setError(null);
         try {
-          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
-          const response = await fetch(`${apiUrl}/tasks/${user}`);
+          const apiUrl = resolveApiUrl();
+          if (!apiUrl) {
+            throw new Error('Configuração ausente: defina NEXT_PUBLIC_API_URL no Vercel apontando para o backend (HTTPS).');
+          }
+          if (typeof window !== 'undefined' && window.location.protocol === 'https:' && apiUrl.startsWith('http://')) {
+            throw new Error('Requisição bloqueada: frontend em HTTPS não pode chamar backend HTTP. Use URL HTTPS no NEXT_PUBLIC_API_URL.');
+          }
+          const ctrl = new AbortController();
+          const timeoutId = setTimeout(() => ctrl.abort(), 15000);
+          const response = await fetch(`${apiUrl}/tasks/${user}`, { signal: ctrl.signal });
+          clearTimeout(timeoutId);
           if (!response.ok) {
             const errData = await response.json();
             throw new Error(errData.detail || 'Falha ao buscar missões.');
           }
           setTasks(await response.json());
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Um erro inesperado ocorreu.');
+          const msg = err instanceof Error ? err.message : 'Um erro inesperado ocorreu.';
+          setError(msg);
         } finally {
           setLoading(false);
         }
@@ -222,12 +232,19 @@ function incrementStreak(setter: (updater: (prev: number) => number) => void) {
 }
 
 function StatusPill({ label, colorClass, stateKey }: { label: string; colorClass: string; stateKey: 'sheet' | 'ia' }) {
-  const [online, setOnline] = useState<boolean>(true);
+  const [online, setOnline] = useState<boolean>(false);
   useEffect(() => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
-    fetch(`${apiUrl}/status`).then(r => r.json()).then((s) => {
-      setOnline(Boolean(s?.[stateKey]?.online));
-    }).catch(() => setOnline(false));
+    const apiUrl = resolveApiUrl();
+    if (!apiUrl) { setOnline(false); return; }
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    fetch(`${apiUrl}/status`, { signal: ctrl.signal })
+      .then(r => r.json())
+      .then((s) => {
+        setOnline(Boolean(s?.[stateKey]?.online));
+      })
+      .catch(() => setOnline(false))
+      .finally(() => clearTimeout(t));
   }, [stateKey]);
   return (
     <span className={clsx('inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs', 'bg-surface border border-panel text-muted')}>
@@ -235,6 +252,11 @@ function StatusPill({ label, colorClass, stateKey }: { label: string; colorClass
       <span>{label}: {online ? 'Online' : 'Offline'}</span>
     </span>
   );
+}
+
+function resolveApiUrl(): string {
+  const envUrl = process.env.NEXT_PUBLIC_API_URL || '';
+  return envUrl;
 }
 
 function PlanList({ summary }: { summary: string }) {
