@@ -4,7 +4,12 @@
 
 /* Base document styles for the Light theme */
 html, body {
-  @apply bg-base text-secondary antialiased;
+  /* Softer background to avoid a flat white screen */
+  background:
+    radial-gradient(1100px 650px at -10% -10%, rgba(37,99,235,.08), transparent 60%),
+    radial-gradient(900px 550px at 120% 0%, rgba(16,185,129,.08), transparent 60%),
+    #F7F9FC;
+  @apply text-secondary antialiased;
 }
 
 [data-theme="dark"] body, [data-theme="dark"] html {

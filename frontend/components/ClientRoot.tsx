@@ -7,8 +7,11 @@ export default function ClientRoot({ children }: { children: React.ReactNode }) 
   const { Toasts } = useToasts();
   return (
     <>
+      {/* Keep starfield subtle to avoid overpowering white screens */}
       <Starfield />
-      {children}
+      <div className="min-h-screen">
+        {children}
+      </div>
       <Toasts />
     </>
   );
