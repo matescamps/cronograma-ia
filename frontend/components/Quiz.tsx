@@ -34,7 +34,7 @@ export default function Quiz({ user, subject, apiUrl, id }: QuizProps) {
       const answer = String(q?.answer ?? '').toLowerCase();
       let normalizedAnswer = q?.answer;
       if (type === 'truefalse') {
-        normalizedAnswer = answer === 'true' || answer === 'verdadeiro' ? 'true' : 'false';
+        normalizedAnswer = answer === 'true' || answer === 'verdadeiro' || answer === 'v' ? 'true' : 'false';
       }
       return {
         type,
