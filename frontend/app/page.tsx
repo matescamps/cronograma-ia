@@ -250,7 +250,7 @@ const MissionCard = ({ subject, activity, onComplete, apiUrl, user, onXpChange }
   };
 
   return (
-    <div className="bg-white border border-panel rounded-2xl p-6 shadow-sm">
+    <div className="glass border border-panel rounded-2xl p-6 shadow-md">
       <h2 className="text-3xl font-extrabold text-secondary mb-1">{subject}</h2>
       <p className="text-primary text-lg mb-4">{activity}</p>
 
@@ -276,10 +276,10 @@ const MissionCard = ({ subject, activity, onComplete, apiUrl, user, onXpChange }
             <MetaEditor id="meta-section" user={user} apiUrl={apiUrl} />
             <Pomodoro id="pomodoro-section" onFocusComplete={() => { onXpChange(); }} />
           </div>
-          <div className="flex items-center justify-between pt-2">
-            <button className="px-4 py-2 rounded-lg border border-panel text-secondary hover:border-primary hover:text-primary transition-colors" onClick={() => setProgress(p => Math.min(100, p + 25))}>+ Progresso</button>
-            <button className="px-4 py-2 rounded-lg bg-primary text-white hover:opacity-90" onClick={completeTask}>Marcar como concluída</button>
-          </div>
+      <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between pt-2">
+        <button className="px-4 py-2 rounded-lg border border-panel text-secondary hover:border-primary hover:text-primary transition-colors" onClick={() => setProgress(p => Math.min(100, p + 25))}>+ Progresso</button>
+        <button className="px-4 py-2 rounded-lg bg-primary text-white hover:opacity-90" onClick={completeTask}>Marcar como concluída</button>
+      </div>
         </div>
       )}
     </div>
@@ -291,10 +291,10 @@ const Flashcard = ({ front, back }: { front: string; back: string }) => {
   return (
     <div className="perspective h-40" onClick={() => setIsFlipped(!isFlipped)}>
       <div className={clsx("relative w-full h-full transform-style-3d transition-transform duration-700", isFlipped && "rotate-y-180")}> 
-        <div className="absolute w-full h-full backface-hidden flex items-center justify-center p-4 rounded-xl bg-surface border border-panel text-center cursor-pointer shadow-sm">
+        <div className="absolute w-full h-full backface-hidden flex items-center justify-center p-4 rounded-xl bg-surface border border-panel text-center cursor-pointer shadow-sm hover:shadow-md transition-all">
           <p className="text-secondary">{front}</p>
         </div>
-        <div className="absolute w-full h-full backface-hidden flex items-center justify-center p-4 rounded-xl bg-primary text-white text-center cursor-pointer rotate-y-180 shadow-sm">
+        <div className="absolute w-full h-full backface-hidden flex items-center justify-center p-4 rounded-xl bg-primary text-white text-center cursor-pointer rotate-y-180 shadow-md">
           <p className="font-semibold">{back}</p>
         </div>
       </div>
