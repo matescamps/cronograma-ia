@@ -3,6 +3,7 @@
 import { useState } from "react";
 import clsx from "clsx";
 
+const INPUT_CLASS = "w-full border border-panel rounded-lg p-2 bg-white text-secondary focus:outline-none focus:ring-2 focus:ring-primary";
 export interface ProgressEditorProps {
   user: string;
   apiUrl: string;
@@ -26,7 +27,6 @@ export default function ProgressEditor({
   onSaved,
   id,
 }: ProgressEditorProps) {
-  const inputClass = "w-full border border-panel rounded-lg p-2 bg-white text-secondary focus:outline-none focus:ring-2 focus:ring-primary";
   const [planned, setPlanned] = useState<string>(String(defaultPlanned ?? ""));
   const [done, setDone] = useState<string>(String(defaultDone ?? ""));
   const [theoryDone, setTheoryDone] = useState<boolean>(Boolean(defaultTheoryDone));
@@ -76,7 +76,7 @@ export default function ProgressEditor({
         <div className="col-span-2 md:col-span-2">
           <label className="block text-sm text-muted mb-1">Status</label>
           <select
-            className={inputClass}
+            className={INPUT_CLASS}
             value={status}
             onChange={(e) => setStatus(e.target.value)}
           >
@@ -120,7 +120,7 @@ function LabeledInput({ label, type = "text", value, onChange, min, max, suffix 
           min={min}
           max={max}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full border border-panel rounded-lg p-2 bg-white text-secondary focus:outline-none focus:ring-2 focus:ring-primary"
+          className={INPUT_CLASS}
         />
         {suffix && <span className="text-muted text-sm">{suffix}</span>}
       </div>
