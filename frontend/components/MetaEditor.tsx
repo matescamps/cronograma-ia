@@ -3,6 +3,8 @@
 import { useState } from "react";
 import clsx from "clsx";
 
+const INPUT_CLASS = "w-full border border-panel rounded-lg p-2 bg-white text-secondary focus:outline-none focus:ring-2 focus:ring-primary";
+
 export interface MetaEditorProps {
   user: string;
   apiUrl: string;
@@ -26,7 +28,6 @@ export default function MetaEditor({
   onSaved,
   id,
 }: MetaEditorProps) {
-  const inputClass = "w-full border border-panel rounded-lg p-2 bg-white text-secondary focus:outline-none focus:ring-2 focus:ring-primary";
   const [dificuldade, setDificuldade] = useState<string>(String(defaultDificuldade ?? ""));
   const [prioridade, setPrioridade] = useState<string>(String(defaultPrioridade ?? ""));
   const [situacao, setSituacao] = useState<string>(String(defaultSituacao ?? ""));
@@ -105,7 +106,7 @@ function LabeledInput({ label, type = "text", value, onChange, min, max }:
         min={min}
         max={max}
         onChange={(e) => onChange(e.target.value)}
-        className={inputClass}
+        className={INPUT_CLASS}
       />
     </div>
   );
