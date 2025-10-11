@@ -1,21 +1,46 @@
 import type { Config } from "tailwindcss";
-import defaultTheme from 'tailwindcss/defaultTheme';
 
 const config: Config = {
-  content: [
-    // Arquivos da aplicação
-    "./app/**/*.{js,ts,jsx,tsx,mdx}",
-    "./pages/**/*.{js,ts,jsx,tsx,mdx}",
-    "./components/**/*.{js,ts,jsx,tsx,mdx}",
-    "./features/**/*.{js,ts,jsx,tsx,mdx}",
-    "./store/**/*.{js,ts,jsx,tsx}",
-    // Garante que nenhum componente seja perdido
-    "src/**/*.{js,ts,jsx,tsx,mdx}",
-  ],
-  future: {
-    hoverOnlyWhenSupported: true,
-  },
   darkMode: ["class"],
+  content: [
+    './components/**/*.{ts,tsx}',
+    './app/**/*.{ts,tsx}',
+    './features/**/*.{ts,tsx}',
+    './store/**/*.{ts,tsx}',
+  ],
+  prefix: "",
+  important: true,
+  theme: {
+    container: {
+      center: true,
+      padding: "2rem",
+      screens: {
+        "2xl": "1400px",
+      },
+    },
+    extend: {
+      colors: {
+        surface: 'rgb(var(--surface) / <alpha-value>)',
+        primary: 'rgb(var(--primary) / <alpha-value>)',
+        secondary: 'rgb(var(--secondary) / <alpha-value>)',
+        panel: 'rgb(var(--panel) / <alpha-value>)',
+        muted: 'rgb(var(--muted) / <alpha-value>)',
+        success: 'rgb(var(--success) / <alpha-value>)',
+      },
+      fontFamily: {
+        sans: ['var(--font-inter)'],
+      },
+      keyframes: {
+        fadeIn: {
+          '0%': { opacity: '0', transform: 'translateY(10px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+      },
+      animation: {
+        'fade-in': 'fadeIn 0.5s ease-out forwards',
+      },
+    },
+  },
   theme: {
     extend: {
       colors: {
