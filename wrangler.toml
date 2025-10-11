@@ -8,5 +8,4 @@ bucket = "./frontend/.vercel/output/static"
 [build.upload]
 format = "service-worker"
 
-[compatibility_flags]
-nodejs_compat = true
+compatibility_flags = ["nodejs_compat"]
