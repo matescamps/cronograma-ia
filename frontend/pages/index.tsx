@@ -28,7 +28,7 @@ interface CoachAdvice {
 }
 
 export default function FocusOS() {
-  const { Toasts } = useToasts();
+  const { Toast } = useToasts();
   const [user, setUser] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -154,7 +154,7 @@ export default function FocusOS() {
       )}
       <Confetti burst={burst} />
       <AssistantDock apiUrl={apiUrl} />
-      <Toasts />
+      <Toast />
     </main>
   );
 }
