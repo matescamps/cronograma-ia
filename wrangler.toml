@@ -1,14 +1,9 @@
-[build]
-command = "cd frontend && npm install && npm run build"
-pages_build_output_dir = ".vercel/output/static"
+# wrangler.toml
+# Nome do seu projeto na Cloudflare Pages. Mude se for diferente.
+name = "cronograma-ia" 
 
-[site]
-bucket = "./frontend/.vercel/output/static"
-
-[build.upload]
-format = "service-worker"
-
+# Habilita a compatibilidade com APIs do Node.js para as funções do seu site.
 compatibility_flags = ["nodejs_compat"]
 
-[env]
-NODE_VERSION = "22"
+# Define a data de compatibilidade para garantir o funcionamento estável das APIs.
+compatibility_date = "2024-03-20"
