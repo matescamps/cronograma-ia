@@ -1,6 +1,27 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Garantir que o Tailwind seja carregado na ordem correta */
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+
+/* Forçar carregamento de estilos base */
+@layer base {
+  :root {
+    color-scheme: light dark;
+  }
+  
+  html {
+    -webkit-text-size-adjust: 100%;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+      'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    tab-size: 4;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    line-height: inherit;
+    margin: 0;
+  }
+}
 :root[data-theme='light']{
   --color-primary: 37 99 235;
   --color-surface: 248 250 252;

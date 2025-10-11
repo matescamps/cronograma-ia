@@ -1,12 +1,21 @@
 import type { Config } from "tailwindcss";
+import defaultTheme from 'tailwindcss/defaultTheme';
 
 const config: Config = {
   content: [
+    // Arquivos da aplicação
     "./app/**/*.{js,ts,jsx,tsx,mdx}",
-    "./app/features/**/*.{js,ts,jsx,tsx,mdx}",
+    "./pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
+    "./features/**/*.{js,ts,jsx,tsx,mdx}",
     "./store/**/*.{js,ts,jsx,tsx}",
+    // Garante que nenhum componente seja perdido
+    "src/**/*.{js,ts,jsx,tsx,mdx}",
   ],
+  future: {
+    hoverOnlyWhenSupported: true,
+  },
+  darkMode: ["class"],
   theme: {
     extend: {
       colors: {
