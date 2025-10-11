@@ -9,3 +9,6 @@ bucket = "./frontend/.vercel/output/static"
 format = "service-worker"
 
 compatibility_flags = ["nodejs_compat"]
+
+[env]
+NODE_VERSION = "18"
