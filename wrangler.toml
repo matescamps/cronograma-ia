@@ -1,0 +1,10 @@
+[build]
+command = "npm run build"
+cwd = "frontend"
+entry = "frontend/_worker.js"
+
+[build.upload]
+format = "service-worker"
+
+[compatibility_flags]
+nodejs_compat = true
