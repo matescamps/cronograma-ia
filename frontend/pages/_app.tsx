@@ -3,6 +3,7 @@ import { ThemeProvider } from 'styled-components';
 import { Inter } from 'next/font/google';
 import '../styles/global.scss';
 import ClientRoot from '../components/ClientRoot';
+import styled from 'styled-components';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -17,14 +18,28 @@ const theme = {
   },
 };
 
+const AppContainer = styled.div`
+  min-height: 100vh;
+  background-color: var(--surface-color);
+  color: var(--secondary-color);
+`;
+
+const MainContent = styled.main`
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+`;
+
 export default function App({ Component, pageProps }: AppProps) {
   return (
     <ThemeProvider theme={theme}>
-      <div className={inter.className}>
+      <AppContainer className={inter.className}>
         <ClientRoot>
-          <Component {...pageProps} />
+          <MainContent>
+            <Component {...pageProps} />
+          </MainContent>
         </ClientRoot>
-      </div>
+      </AppContainer>
     </ThemeProvider>
   );
 }
