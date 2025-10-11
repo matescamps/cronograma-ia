@@ -11,4 +11,4 @@ format = "service-worker"
 compatibility_flags = ["nodejs_compat"]
 
 [env]
-NODE_VERSION = "18"
+NODE_VERSION = "22"
