@@ -1,5 +1,3 @@
-'use client';
-
 import { useState, useEffect, useMemo } from 'react';
 import clsx from 'clsx';
 import ProgressEditor from '../components/ProgressEditor';
@@ -38,7 +36,7 @@ export default function FocusOS() {
   const [insights, setInsights] = useState<string | null>(null);
   const [burst, setBurst] = useState(0);
   const [commandOpen, setCommandOpen] = useState(false);
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://cronograma-ia-backend.vercel.app';
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window === 'undefined') return 'light';
     const stored = localStorage.getItem('focus_theme') as 'light' | 'dark' | null;
