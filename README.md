@@ -5,13 +5,13 @@ Sistema de cronograma inteligente com IA para otimização de estudos.
 ## Estrutura do Projeto
 
 - `backend/`: API FastAPI com integração Google Sheets
-  - `main.py`: Ponto de entrada da API.
-  - `frontend/`: Interface SvelteKit moderna
-    - Login cinemático
-    - Dashboard imersivo
-    - Componentes interativos
-  - `requirements.txt`: Dependências do Python.
-  - `.env`: Variáveis de ambiente do backend.
+  - `main.py`: Ponto de entrada da API
+  - `requirements.txt`: Dependências do Python
+  - `.env`: Variáveis de ambiente do backend
+- `frontend/`: Interface Next.js moderna
+  - Login cinemático
+  - Dashboard imersivo
+  - Componentes interativos
 
 ## Começando
 
@@ -31,7 +31,7 @@ Sistema de cronograma inteligente com IA para otimização de estudos.
 
 4. Instale as dependências do frontend:
    ```bash
-   cd backend/frontend
+   cd frontend
    npm install
    ```
 
@@ -42,6 +42,6 @@ Sistema de cronograma inteligente com IA para otimização de estudos.
    uvicorn main:app --reload
 
    # Terminal 2 - Frontend
-   cd backend/frontend
+   cd frontend
    npm run dev
    ```

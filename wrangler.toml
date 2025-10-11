@@ -2,9 +2,6 @@
 # Nome do seu projeto na Cloudflare Pages. Mude se for diferente.
 name = "cronograma-ia"
 
-# Diretório de saída do build do Next.js
-pages_build_output_dir = "frontend/.next"
-
 # Habilita a compatibilidade com APIs do Node.js para as funções do seu site.
 compatibility_flags = ["nodejs_compat"]
 
