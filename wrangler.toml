@@ -1,7 +1,9 @@
 [build]
-command = "npm run build"
-cwd = "frontend"
-entry = "frontend/_worker.js"
+command = "cd frontend && npm install && npm run build"
+pages_build_output_dir = ".vercel/output/static"
+
+[site]
+bucket = "./frontend/.vercel/output/static"
 
 [build.upload]
 format = "service-worker"
