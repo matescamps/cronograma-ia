@@ -1,0 +1,27 @@
+name: optimize-nightly
+on:
+  schedule:
+    - cron: '0 3 * * *' # 03:00 UTC todo dia — ajuste se necessário
+  workflow_dispatch:
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run optimize CLI
+        env:
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID_OR_URL: ${{ secrets.SPREADSHEET_ID_OR_URL }}
+          SHEET_TAB_NAME: ${{ secrets.SHEET_TAB_NAME }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_API_URL: ${{ secrets.GROQ_API_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python optimize_cli.py

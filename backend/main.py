@@ -3,219 +3,43 @@ import re
 import json
 import logging
 import time
-from typing import TypeVar, ParamSpec, Callable, cast, Any, Dict, Optional, TypedDict, Union, List, Tuple, Hashable
-from typing_extensions import TypeGuard
+from typing import Optional, Dict, List, Any, Tuple
 from fastapi import FastAPI, HTTPException
-from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from pydantic.json import pydantic_encoder
+from pydantic import BaseModel
 import gspread
 from gspread.exceptions import WorksheetNotFound
 from google.oauth2.service_account import Credentials
-from fastapi import Depends
 import pandas as pd
-from pandas.core.frame import DataFrame
-from pandas.core.series import Series
 from datetime import date, datetime, timedelta
 import requests
 from dotenv import load_dotenv
-from functools import wraps
-
-# Type aliases
-JsonDict = Dict[str, Any]
-SafeDict = Dict[str, Any]
-
-# Environment variable helper
-def safe_environ(name: str, required: bool = True) -> str:
-    """Get environment variable with proper error handling."""
-    value = os.getenv(name)
-    if required and not value:
-        raise ValueError(f"Required environment variable {name} is not set")
-    return cast(str, value)  # We know it's not None here
-
-# Load environment variables with defaults
-creds_json = safe_environ('GCP_CREDS_JSON', required=True)
-spreadsheet_id = safe_environ('SPREADSHEET_IDENTIFIER', required=True)
-sheet_name = safe_environ('SHEET_NAME', required=True)
-
-# Type variables for generic functions
-T = TypeVar('T')  # Return type
-P = ParamSpec('P')  # Parameters
-R = TypeVar('R', covariant=True)  # Return type with covariance
-
-# Custom type aliases for improved type safety
-RowType = Dict[str, Any]  # Type for a single row
-RecordsType = List[RowType]  # Type for multiple rows
-
-# DataFrame type aliases and helper functions
-ValueType = Union[str, int, float, bool, None]
-RowDict = Dict[str, ValueType]
-RecordsList = List[RowDict]
-
-def normalize_value(value: Any) -> ValueType:
-    """Normalize a value to a known type."""
-    if pd.isna(value):
-        return None
-    elif isinstance(value, (int, float, bool)):
-        return value
-    return str(value)
-
-def convert_series(series: Series) -> RowDict:
-    """Convert a pandas Series to a dictionary with normalized types."""
-    result: RowDict = {}
-    for k, v in series.items():
-        key = str(k)
-        result[key] = normalize_value(v)
-    return result
-
-def clean_series(series: Series, default_value: Any = None) -> Series:
-    """Clean a Series by handling NaN values."""
-    result = series.copy()
-    if pd.isna(default_value):
-        result = result.fillna('')
-    else:
-        result = result.fillna(default_value)
-    return result
-
-def clean_dataframe(df: DataFrame) -> DataFrame:
-    """Clean a DataFrame by handling NaN values."""
-    df_clean = df.copy()
-    
-    # Handle each column individually
-    for col in df_clean.columns:
-        if df_clean[col].dtype in ['float64', 'int64']:
-            df_clean[col] = df_clean[col].fillna(0)
-        else:
-            df_clean[col] = df_clean[col].fillna('')
-            
-    return df_clean
-
-def safe_records(df: DataFrame) -> RecordsList:
-    """Convert a DataFrame to a list of dictionaries with normalized types."""
-    try:
-        df_clean = clean_dataframe(df)
-        return [convert_series(row) for _, row in df_clean.iterrows()]
-    except Exception as e:
-        logging.error(f"Error converting DataFrame to records: {e}")
-        return []
-
-def safe_row(df: DataFrame, mask: Series) -> RowDict:
-    """Extract a single row from a DataFrame with proper types."""
-    try:
-        filtered = df[mask]
-        if not filtered.empty:
-            return convert_series(filtered.iloc[0])
-    except Exception as e:
-        logging.error(f"Error extracting row from DataFrame: {e}")
-    return {}
-
-# Cache system with type safety
-CacheKey = str
-CacheValue = Any
-_cache: Dict[CacheKey, Tuple[CacheValue, float]] = {}
-
-def get_cache(key: CacheKey) -> Optional[CacheValue]:
-    """Get a value from cache if it is still valid."""
-    if key not in _cache:
-        return None
-    value, expiry = _cache[key]
-    if time.time() > expiry:
-        del _cache[key]
-        return None
-    return value
-
-def set_cache(key: CacheKey, value: CacheValue, ttl: float = 300.0) -> None:
-    """Store a value in cache with expiry."""
-    _cache[key] = (value, time.time() + ttl)
-
-FuncT = TypeVar('FuncT', bound=Callable[..., Any])
-
-def cached(ttl: float) -> Callable[[FuncT], FuncT]:
-    """Cache decorator with TTL (time-to-live)."""
-    def decorator(func: FuncT) -> FuncT:
-        @wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            key = repr((func.__name__, args, kwargs))
-            if (cached_result := get_cache(key)) is not None:
-                return cached_result
-                
-            result = func(*args, **kwargs)
-            set_cache(key, result, ttl)
-            return result
-            
-        return cast(FuncT, wrapper)
-    return decorator
 
 # Load environment variables (from .env when present)
 load_dotenv()
 
 # Configure structured logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s - %(message)s')
 logger = logging.getLogger("focus_os")
 
 # Non-negotiable defaults (act as safe fallbacks if envs are absent)
-DEFAULT_SPREADSHEET_ID: str = "1AdMTt9YmJ2QM-We_9NxsEIvW1lJeocLAWBsNbOiDTLE"
-DEFAULT_SHEET_NAME: str = "Cronograma e Utilizadores"
+DEFAULT_SPREADSHEET_ID = "1AdMTt9YmJ2QM-We_9NxsEIvW1lJeocLAWBsNbOiDTLE"
+DEFAULT_SHEET_NAME = "Cronograma e Utilizadores"
 
-# Custom types for improved type safety
-EnvStr = str | None
-
-# Environment variables with proper type annotations
-GCP_CREDS_JSON: EnvStr = os.getenv("GCP_SERVICE_ACCOUNT_JSON")
-SPREADSHEET_IDENTIFIER: str = (
-    os.getenv("SPREADSHEET_ID_OR_URL") or 
-    os.getenv("SPREADSHEET_ID") or 
-    DEFAULT_SPREADSHEET_ID
+# Read environment variables (support both ID or full URL)
+GCP_CREDS_JSON = os.getenv("GCP_SERVICE_ACCOUNT_JSON")
+SPREADSHEET_IDENTIFIER = (
+    os.getenv("SPREADSHEET_ID_OR_URL")
+    or os.getenv("SPREADSHEET_ID")
+    or DEFAULT_SPREADSHEET_ID
 )
-SHEET_NAME: str = os.getenv("SHEET_TAB_NAME") or DEFAULT_SHEET_NAME
-GROQ_API_KEY: EnvStr = os.getenv("GROQ_API_KEY")
-API_AUTH_TOKEN: EnvStr = os.getenv("API_AUTH_TOKEN")
+SHEET_NAME = os.getenv("SHEET_TAB_NAME") or DEFAULT_SHEET_NAME
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# DataFrame type aliases for better type hints
-DataFrameRow = Dict[str, Any]
-DataFrameResult = List[DataFrameRow]
-
-# Validate critical environment variables
-missing_vars: List[str] = []
-if not GCP_CREDS_JSON:
-    missing_vars.append("GCP_SERVICE_ACCOUNT_JSON")
-if not GROQ_API_KEY:
-    missing_vars.append("GROQ_API_KEY")
-if not API_AUTH_TOKEN:
-    missing_vars.append("API_AUTH_TOKEN")
-
-if missing_vars:
+if not all([GCP_CREDS_JSON, GROQ_API_KEY]):
     raise ValueError(
-        f"ERRO CRÍTICO: As seguintes variáveis de ambiente estão ausentes: {', '.join(missing_vars)}"
+        "ERRO CRÍTICO: Variáveis de ambiente ausentes. Defina GCP_SERVICE_ACCOUNT_JSON e GROQ_API_KEY."
     )
-
-# Tipos para validação do service account
-ServiceAccountDict = Dict[str, str]
-
-# Validate Google Service Account JSON
-if GCP_CREDS_JSON is None:
-    raise ValueError("GCP_SERVICE_ACCOUNT_JSON não pode ser None")
-
-try:
-    creds_dict: ServiceAccountDict = json.loads(GCP_CREDS_JSON)
-    required_fields: List[str] = ["type", "project_id", "private_key_id", "private_key", "client_email"]
-    missing_fields: List[str] = [field for field in required_fields if field not in creds_dict]
-    if missing_fields:
-        raise ValueError(f"GCP_SERVICE_ACCOUNT_JSON está incompleto. Campos ausentes: {', '.join(missing_fields)}")
-    
-    # Validate correct service account
-    EXPECTED_EMAIL: str = "eusoufoda@gen-lang-client-0636296115.iam.gserviceaccount.com"
-    client_email: Optional[str] = creds_dict.get("client_email")
-    if client_email != EXPECTED_EMAIL:
-        raise ValueError(f"Service account incorreta. Use a conta: {EXPECTED_EMAIL}")
-        
-except json.JSONDecodeError:
-    raise ValueError("GCP_SERVICE_ACCOUNT_JSON não é um JSON válido")
 
 app = FastAPI(title="Focus OS API")
 
@@ -227,14 +51,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Segurança: Autenticação simples por Header ---
-api_key_header = APIKeyHeader(name="X-Focus-Token", auto_error=True)
-
-async def verify_token(token: str = Depends(api_key_header)):
-    if token != API_AUTH_TOKEN:
-        raise HTTPException(status_code=403, detail="Token inválido ou ausente.")
-
-authed_deps = [Depends(verify_token)]
 
 def _redact(text: Optional[str]) -> str:
     if not text:
@@ -264,9 +80,7 @@ def init_gsheets_state() -> None:
     app.state.gs_last_error = None
     try:
         logger.info("Inicializando autenticação com Google usando service account (email mascarado).")
-        if not GCP_CREDS_JSON:
-            raise ValueError("GCP_CREDS_JSON environment variable is not set")
-        creds_dict = json.loads(cast(str, GCP_CREDS_JSON))
+        creds_dict = json.loads(GCP_CREDS_JSON)
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive",
@@ -309,48 +123,28 @@ def init_gsheets_state() -> None:
         logger.exception("Falha ao conectar ao Google Sheets: %s", e)
 
 
-
-@cached(ttl=60) # Cache de 60 segundos
 def get_data_as_dataframe() -> pd.DataFrame:
     if not hasattr(app.state, "worksheet") or app.state.worksheet is None:
         raise HTTPException(
             status_code=503,
             detail="Serviço indisponível: conexão com a planilha falhou. Consulte /status para detalhes.",
         )
+
     worksheet = app.state.worksheet
     logger.info("Solicitando dados da planilha '%s' via get_all_values()...", worksheet.title)
     all_values = worksheet.get_all_values()
     logger.info("Linhas retornadas (incl. cabeçalho): %d", len(all_values))
     if not all_values:
         return pd.DataFrame()
+
     headers = all_values[0]
     df = pd.DataFrame(all_values[1:], columns=headers)
     if "Data" in df.columns:
         df["Data"] = pd.to_datetime(df["Data"], format="%d/%m/%Y", errors="coerce")
     else:
         logger.warning("Coluna 'Data' não encontrada na planilha. Datas serão ignoradas.")
-    _cache.pop("get_sheet_snapshot", None) # Invalida cache dependente
     return df
 
-def _get_user_row_data(date_obj: date, user: str) -> Optional[Dict[str, Any]]:
-    """Helper to get all data for a specific user and date."""
-    df = get_data_as_dataframe()
-    if df.empty:
-        return None
-    
-    mask = (df["Data"].dt.date == date_obj) & (
-        df["Aluno(a)"].str.lower() == user.lower()
-    )
-    
-    if not mask.any():
-        # Check for 'ambos' if no specific user row found
-        mask_ambos = (df["Data"].dt.date == date_obj) & (
-            df["Aluno(a)"].str.lower() == 'ambos'
-        )
-        if mask_ambos.any():
-            return df[mask_ambos].iloc[0].to_dict()
-        return None
-    return df[mask].iloc[0].to_dict()
 
 def _get_sheet_snapshot() -> Tuple[List[str], List[List[str]]]:
     """Return (headers, rows) from the cached worksheet. Rows exclude header row."""
@@ -361,7 +155,6 @@ def _get_sheet_snapshot() -> Tuple[List[str], List[List[str]]]:
     if not all_values:
         return [], []
     headers = all_values[0]
-    _cache.pop(f"cached_dataframe", None) # Invalida o cache do dataframe principal
     return headers, all_values[1:]
 
 
@@ -419,9 +212,6 @@ def _ensure_row_for(date_obj: date, user: str) -> int:
                 logger.exception("Falha ao inserir nova linha: %s", e)
                 raise HTTPException(status_code=500, detail="Falha ao inserir linha no Sheets.")
             time.sleep(0.4 * (attempt + 1))
-    
-    # This should never be reached as the loop above either returns or raises an exception
-    raise RuntimeError("Unreachable code")
 
 
 def _safe_update_cells(row_index: int, updates: Dict[str, Any]) -> None:
@@ -457,8 +247,8 @@ def _safe_update_cells(row_index: int, updates: Dict[str, Any]) -> None:
 def read_root():
     return {"status": "Focus OS API online. Ready for duty."}
 
-@app.get("/tasks/{user}", dependencies=authed_deps)
-def get_today_tasks(user: str) -> List[Dict[str, Any]]:
+@app.get("/tasks/{user}")
+def get_today_tasks(user: str):
     try:
         df = get_data_as_dataframe()
         if df.empty: return []
@@ -474,100 +264,21 @@ def get_today_tasks(user: str) -> List[Dict[str, Any]]:
             df_user_today = df_today
         df_user_today = df_user_today.fillna('').to_dict('records')
         
-        # Convert to the expected type
-        return cast(List[Dict[str, Any]], df_user_today)
+        return df_user_today
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-class OracleBriefingRequest(BaseModel):
-    user: str
-    date_str: Optional[str] = None # dd/mm/yyyy
-    period: str # Manhã, Tarde, Noite
-
-@app.post("/oracle-briefing", response_model=dict, dependencies=authed_deps)
-def get_oracle_briefing(request: OracleBriefingRequest):
-    target_date = (
-        datetime.strptime(request.date_str, "%d/%m/%Y").date() if request.date_str else date.today()
-    )
-    
-    row_data = _get_user_row_data(target_date, request.user)
-    
-    if not row_data:
-        return {"briefing": f"Olá, {request.user}. Nenhuma missão encontrada para {target_date.strftime('%d/%m')}. Aproveite o dia!"}
-
-    # Extract relevant data for the AI prompt
-    subject_key = f"Matéria ({request.period})"
-    activity_key = f"Atividade Detalhada ({request.period})"
-    
-    subject = row_data.get(subject_key, "N/A")
-    activity = row_data.get(activity_key, "N/A")
-    difficulty = row_data.get("Dificuldade (1-5)", "não informada")
-    alert_comment = row_data.get("Alerta/Comentário", "nenhum comentário anterior")
-    priority = row_data.get("Prioridade", "não definida")
-    
-    # Construct a detailed prompt for the AI
-    prompt = (
-        f"Você é o Oráculo do Focus OS, um mentor estratégico para estudantes de medicina. "
-        f"Sua missão é fornecer um briefing motivacional e tático para o operador {request.user}, "
-        f"focando na missão de {request.period} para {target_date.strftime('%d/%m/%Y')}. "
-        f"A missão é: Matéria '{subject}' - Atividade '{activity}'.\n\n"
-        f"Contexto do Operador:\n"
-        f"- Dificuldade reportada anteriormente: {difficulty}\n"
-        f"- Alerta/Comentário anterior: '{alert_comment}'\n"
-        f"- Prioridade atual: '{priority}'\n\n"
-        f"Com base nesses dados, crie um parágrafo estratégico e inspirador. "
-        f"Inclua uma análise do comentário anterior, um foco tático para a missão e reforce a prioridade. "
-        f"Seja conciso, direto e com um tom de voz de um mentor experiente. "
-        f"Exemplo: 'Bom dia, Mateus. Sua missão da manhã é Matemática - Geometria Espacial. Da última vez, seu comentário foi 'confuso com o cálculo de volume de cones'. Alerta da IA: Foque na dedução da fórmula, não na memorização. Sua prioridade hoje é Precisão. Execute com excelência.'"
-    )
-
-    try:
-        headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-        payload = {"model": "gemma2-9b-it", "messages": [{"role": "user", "content": prompt}], "temperature": 0.7, "max_tokens": 300}
-        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=15)
-        response.raise_for_status()
-        briefing_text = response.json()['choices'][0]['message']['content']
-        return {"briefing": briefing_text}
-    except Exception as e:
-        logger.error("Falha na chamada à IA Groq para briefing: %s", e)
-        return {"briefing": f"Olá, {request.user}. Sua missão de {request.period} é '{subject}' - '{activity}'. Mantenha o foco e boa sorte!"}
-
-class MindMeldRequest(BaseModel):
-    subject: str
-    activity: str
-    last_comment: Optional[str] = "Nenhum"
-
-@app.post("/mind-meld", response_model=dict, dependencies=authed_deps)
-def get_mind_meld_insight(request: MindMeldRequest):
-    prompt = (
-        f"URGENTE: Meu operador está em apuros com {request.subject} - {request.activity}. "
-        f"O último Alerta/Comentário dele foi '{request.last_comment}'. "
-        "Ignore explicações genéricas. Forneça três novas perspectivas radicais para entender este conceito "
-        "e uma única pergunta desafiadora que o force a pensar diferente. "
-        "Aja como um mentor socrático, não como um livro didático. "
-        "Responda em texto simples, direto ao ponto."
-    )
-    try:
-        headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-        payload = {"model": "gemma2-9b-it", "messages": [{"role": "user", "content": prompt}], "temperature": 0.8, "max_tokens": 400}
-        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=20)
-        response.raise_for_status()
-        return {"insight": response.json()['choices'][0]['message']['content']}
-    except Exception as e:
-        logger.error("Falha na chamada à IA Groq para MIND MELD: %s", e)
-        return {"insight": "// TRANSMISSÃO DE EMERGÊNCIA INTERROMPIDA // Recalibre. Respire fundo. Qual é a pergunta mais fundamental que você ainda não fez sobre este tópico?"}
 
 class CoachRequest(BaseModel):
     subject: str
     activity: str
 
-@app.post("/coach", response_model=dict, dependencies=authed_deps)
+@app.post("/coach", response_model=dict)
 def get_coach_advice(request: CoachRequest):
     prompt = f'Você é o "System Coach" do Focus OS. Sua missão é gerar um plano tático e 2 flashcards. Responda EXCLUSIVAMENTE em JSON com chaves "summary" e "flashcards" (lista de objetos com "q" e "a"). MISSÃO: Matéria: {request.subject}, Atividade: {request.activity}'
     try:
         headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
         payload = {"model": "gemma2-9b-it", "messages": [{"role": "user", "content": prompt}], "temperature": 0.7, "response_format": {"type": "json_object"}}
-        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=15)
+        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=20)
         response.raise_for_status()
         return json.loads(response.json()['choices'][0]['message']['content'])
     except Exception as e:
@@ -619,8 +330,8 @@ class AskRequest(BaseModel):
     mode: Optional[str] = "mixed"  # mcq | truefalse | mixed
 
 
-@app.post("/ask", response_model=dict, dependencies=authed_deps)
-def ask_quiz(req: AskRequest) -> dict:
+@app.post("/ask", response_model=dict)
+def ask_quiz(req: AskRequest):
     count = min(max(req.count or 3, 3), 5)
     mode = req.mode if req.mode in {"mcq", "truefalse", "mixed"} else "mixed"
     system_prompt = (
@@ -642,7 +353,7 @@ def ask_quiz(req: AskRequest) -> dict:
             "temperature": 0.7,
             "response_format": {"type": "json_object"},
         }
-        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=15)
+        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=20)
         response.raise_for_status()
         data = json.loads(response.json()["choices"][0]["message"]["content"])  # type: ignore[index]
         # Normalize shape for frontend robustness
@@ -691,8 +402,8 @@ def ask_quiz(req: AskRequest) -> dict:
         return sample
 
 
-@app.get("/summary/{user}", dependencies=authed_deps)
-def get_summary(user: str) -> Dict[str, Any]:
+@app.get("/summary/{user}")
+def get_summary(user: str) -> dict:
     try:
         df = get_data_as_dataframe()
         if df.empty:
@@ -700,8 +411,7 @@ def get_summary(user: str) -> Dict[str, Any]:
 
         today = date.today()
         # Filter
-        aluno_series = df.get("Aluno(a)", pd.Series("", index=df.index)).astype(str)
-        df_user = df[(aluno_series.str.lower() == user.lower()) | (aluno_series.str.lower() == "ambos")]
+        df_user = df[(df.get("Aluno(a)", "").str.lower() == user.lower()) | (df.get("Aluno(a)", "").str.lower() == "ambos")]
         df_recent = df_user.copy()
         if "Data" in df_recent.columns:
             df_recent = df_recent.sort_values("Data", ascending=False)
@@ -719,8 +429,7 @@ def get_summary(user: str) -> Dict[str, Any]:
                 pct = int(float(val)) if val.replace(".", "", 1).isdigit() else None
             if "Dificuldade (1-5)" in df_today.columns:
                 try:
-                    diff_val = df_today.iloc[0]["Dificuldade (1-5)"]
-                    diff = int(float(str(diff_val) if pd.notnull(diff_val) else "0"))
+                    diff = int(float(str(df_today.iloc[0]["Dificuldade (1-5)"])) )
                 except Exception:
                     diff = None
             if "Status" in df_today.columns:
@@ -764,8 +473,8 @@ class UpdateProgressRequest(BaseModel):
     status: Optional[str] = None
 
 
-@app.post("/update_progress", dependencies=authed_deps)
-def update_progress(body: UpdateProgressRequest) -> Dict[str, Any]:
+@app.post("/update_progress")
+def update_progress(body: UpdateProgressRequest) -> dict:
     try:
         if not body.user:
             raise HTTPException(status_code=400, detail="Parâmetro 'user' é obrigatório.")
@@ -818,8 +527,8 @@ class UpdateMetaRequest(BaseModel):
     fase_plano: Optional[str] = None
 
 
-@app.post("/update_meta", dependencies=authed_deps)
-def update_meta(body: UpdateMetaRequest) -> Dict[str, Any]:
+@app.post("/update_meta")
+def update_meta(body: UpdateMetaRequest) -> dict:
     try:
         if not body.user:
             raise HTTPException(status_code=400, detail="Parâmetro 'user' é obrigatório.")
@@ -855,15 +564,14 @@ def update_meta(body: UpdateMetaRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="Falha ao atualizar metas.")
 
 
-@app.get("/history/{user}", dependencies=authed_deps)
-def history(user: str) -> Dict[str, List[Dict[str, Any]]]:
+@app.get("/history/{user}")
+def history(user: str) -> dict:
     try:
         df = get_data_as_dataframe()
         if df.empty:
             return {"history": []}
         # Filter by user or 'Ambos'
-        aluno_series = df.get("Aluno(a)", pd.Series("", index=df.index)).astype(str)
-        mask_user = (aluno_series.str.lower() == user.lower()) | (aluno_series.str.lower() == "ambos")
+        mask_user = (df.get("Aluno(a)", "").str.lower() == user.lower()) | (df.get("Aluno(a)", "").str.lower() == "ambos")
         df_user = df[mask_user].copy()
         if "Data" not in df_user.columns:
             return {"history": []}
@@ -883,8 +591,7 @@ def history(user: str) -> Dict[str, List[Dict[str, Any]]]:
             diff_val = None
             if "Dificuldade (1-5)" in df_user.columns:
                 try:
-                    value = row.get("Dificuldade (1-5)", "")
-                    diff_val = int(float(str(value) if pd.notnull(value) else "0"))
+                    diff_val = int(float(str(row.get("Dificuldade (1-5)", ""))))
                 except Exception:
                     diff_val = None
             records.append({
