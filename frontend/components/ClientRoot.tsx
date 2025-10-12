@@ -4,7 +4,7 @@ import Starfield from "./Starfield";
 import useToasts from "./Toast";
 
 export default function ClientRoot({ children }: { children: React.ReactNode }) {
-  const { Toast } = useToasts();
+  const { Toasts } = useToasts();
   return (
     <>
       {/* Keep starfield subtle to avoid overpowering white screens */}
@@ -12,7 +12,7 @@ export default function ClientRoot({ children }: { children: React.ReactNode }) 
       <div className="min-h-screen">
         {children}
       </div>
-      <Toast />
+      <Toasts />
     </>
   );
 }

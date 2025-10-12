@@ -1,9 +1,13 @@
 # wrangler.toml
-# Nome do seu projeto na Cloudflare Pages. Mude se for diferente.
+# Configuração para Cloudflare Pages
 name = "cronograma-ia"
 
-# Habilita a compatibilidade com APIs do Node.js para as funções do seu site.
-compatibility_flags = ["nodejs_compat"]
+# Define o diretório de saída do build do Next.js.
+# A Cloudflare irá servir os arquivos desta pasta.
+pages_build_output_dir = "frontend/.next"
 
-# Define a data de compatibilidade para garantir o funcionamento estável das APIs.
-compatibility_date = "2024-03-20"
+# [DEPRECATED - Removido pois não é usado pelo Pages da forma como estava]
+# As configurações de build serão feitas no dashboard da Cloudflare
+# ou inferidas pelo framework (Next.js).
+# compatibility_flags = ["nodejs_compat"]
+# compatibility_date = "2024-03-20"
