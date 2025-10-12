@@ -5,13 +5,13 @@ Sistema de cronograma inteligente com IA para otimização de estudos.
 ## Estrutura do Projeto
 
 - `backend/`: API FastAPI com integração Google Sheets
-  - `main.py`: Ponto de entrada da API
-  - `requirements.txt`: Dependências do Python
-  - `.env`: Variáveis de ambiente do backend
+  - `main.py`: Ponto de entrada da API.
+  - `requirements.txt`: Dependências do Python.
+  - `.env`: Variáveis de ambiente do backend.
 - `frontend/`: Interface Next.js moderna
   - Login cinemático
   - Dashboard imersivo
-  - Componentes interativos
+  - Componentes interativos.
 
 ## Começando
 

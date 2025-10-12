@@ -18,7 +18,7 @@ if not sa_json or not spreadsheet:
 sa = json.loads(sa_json)
 scopes = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
 creds = Credentials.from_service_account_info(sa, scopes=scopes)
-gc = gspread.authorize(creds)
+gc = gspread_authorize(creds) # Renomeado para evitar conflito com gspread
 if spreadsheet.startswith("http"):
     sh = gc.open_by_url(spreadsheet)
 else:
@@ -30,24 +30,24 @@ data = ws.get_all_records()
 pendings = []
 today = date.today()
 for i, row in enumerate(data):
-    d = row.get("Data")
+    d = row.get(COL_DATA)
     if isinstance(d, str) and d.strip() == "":
         continue
     try:
         dobj = parse_date(d, dayfirst=True).date()
     except:
         continue
-    status = row.get("Status")
-    if dobj < today and status not in [True, "TRUE", "True", 1, "1"]:
+    status = row.get(COL_STATUS)
+    if dobj < today and status not in COMPLETED_STATUSES:
         pendings.append({
             "row_index": i+2,
             "date": dobj.strftime("%d/%m/%Y"),
-            "aluno": row.get("Aluno(a)"),
-            "exame": row.get("Exame"),
-            "manhaPct": int(row.get("% Concluído (Manhã)") or 0),
-            "tardePct": int(row.get("% Concluído (Tarde)") or 0),
-            "noitePct": int(row.get("% Concluído (Noite)") or 0),
-            "manhaTask": str(row.get("Matéria (Manhã)") or "") + " - " + str(row.get("Atividade Detalhada (Manhã)") or "")
+            "aluno": row.get(COL_ALUNO),
+            "exame": row.get(COL_EXAME),
+            "manhaPct": int(row.get(COL_MANHA_PCT) or 0),
+            "tardePct": int(row.get(COL_TARDE_PCT) or 0),
+            "noitePct": int(row.get(COL_NOITE_PCT) or 0),
+            "manhaTask": f"{row.get(COL_MANHA_MATERIA) or ''} - {row.get(COL_MANHA_ATIVIDADE) or ''}"
         })
 
 if not pendings:
@@ -59,10 +59,10 @@ groq_key = os.environ.get("GROQ_API_KEY")
 groq_url = os.environ.get("GROQ_API_URL", "https://api.groq.ai/v1")
 openai_key = os.environ.get("OPENAI_API_KEY")
 
-prompt = "Sugira reagendamento JSON com moves[] para essas pendências:\n"
-for p in pendings:
-    prompt += f"- {p['date']}: {p['aluno']} - {p['exame']} - Manhã {p['manhaPct']}% ({p['manhaTask']})\n"
-prompt = ("RETORNE SOMENTE UM JSON VÁLIDO com chave 'moves' (subject, from, to, period, reason).\n" + prompt)
+pending_lines = "\n".join([
+    f"- {p['date']}: {p['aluno']} - {p['exame']} - Manhã {p['manhaPct']}% ({p['manhaTask']})" for p in pendings
+])
+prompt = f"RETORNE SOMENTE UM JSON VÁLIDO com chave 'moves' (subject, from, to, period, reason).\nSugira reagendamento JSON com moves[] para essas pendências:\n{pending_lines}"
 
 def call_groq(prompt):
     headers = {"Authorization": f"Bearer {groq_key}", "Content-Type":"application/json"}
@@ -77,31 +77,37 @@ def call_openai(prompt):
     resp = openai.ChatCompletion.create(model="gpt-4o-mini", messages=messages, max_tokens=800, temperature=0.2)
     return resp.choices[0].message["content"]
 
-resp_obj = None
-if groq_key:
-    try:
-        r = call_groq(prompt)
-        if r.status_code >=200 and r.status_code<300:
-            try:
-                resp_obj = r.json()
-            except:
-                import re
-                m = re.search(r'\{[\s\S]*\}', r.text)
-                if m:
-                    resp_obj = json.loads(m.group(0))
-    except Exception as e:
-        print("Groq erro:", e)
+def get_ai_suggestion(prompt):
+    """Tenta obter a sugestão da IA, primeiro com Groq, depois com OpenAI como fallback."""
+    def parse_response(text):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            import re
+            match = re.search(r'\{[\s\S]*\}', text)
+            if match:
+                return json.loads(match.group(0))
+        return None
 
-if not resp_obj and openai_key:
-    try:
-        text = call_openai(prompt)
-        import re
-        m = re.search(r'\{[\s\S]*\}', text)
-        if m:
-            resp_obj = json.loads(m.group(0))
-    except Exception as e:
-        print("OpenAI erro:", e)
+    if groq_key:
+        try:
+            print("Tentando chamada com Groq...")
+            r = call_groq(prompt)
+            r.raise_for_status() # Lança exceção para status de erro (4xx ou 5xx)
+            return parse_response(r.text)
+        except Exception as e:
+            print(f"Erro na chamada com Groq: {e}")
 
+    if openai_key:
+        try:
+            print("Tentando chamada com OpenAI...")
+            text = call_openai(prompt)
+            return parse_response(text)
+        except Exception as e:
+            print(f"Erro na chamada com OpenAI: {e}")
+    return None
+
+resp_obj = get_ai_suggestion(prompt)
 if not resp_obj:
     print("Nenhuma resposta válida de IA; encerrando.")
     exit(0)
@@ -117,18 +123,18 @@ for mv in moves:
     row = [None] * len(ws.row_values(1))
     header = ws.row_values(1)
     hmap = {h:i for i,h in enumerate(header)}
-    if "Data" in hmap:
+    if COL_DATA in hmap:
         try:
             parsed = parse_date(to, dayfirst=True).date()
-            row[hmap["Data"]] = parsed.strftime("%d/%m/%Y")
+            row[hmap[COL_DATA]] = parsed.strftime("%d/%m/%Y")
         except:
-            row[hmap["Data"]] = to
-    if "Atividade Detalhada (Manhã)" in hmap and period.startswith("man"):
-        row[hmap["Atividade Detalhada (Manhã)"]] = subject
-    elif "Atividade Detalhada (Tarde)" in hmap and period.startswith("tar"):
-        row[hmap["Atividade Detalhada (Tarde)"]] = subject
-    elif "Atividade Detalhada (Noite)" in hmap:
-        row[hmap["Atividade Detalhada (Noite)"]] = subject
+            row[hmap[COL_DATA]] = to
+    if COL_MANHA_ATIVIDADE in hmap and period.startswith("man"):
+        row[hmap[COL_MANHA_ATIVIDADE]] = subject
+    elif COL_TARDE_ATIVIDADE in hmap and period.startswith("tar"):
+        row[hmap[COL_TARDE_ATIVIDADE]] = subject
+    elif COL_NOITE_ATIVIDADE in hmap: # Fallback para noite
+        row[hmap[COL_NOITE_ATIVIDADE]] = subject
     ws.append_row(row)
 
 print("Aplicação concluída.")
